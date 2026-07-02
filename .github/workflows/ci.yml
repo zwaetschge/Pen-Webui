@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: dnd
+          POSTGRES_PASSWORD: dnd
+          POSTGRES_DB: dnd
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dnd"
+          --health-interval 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql://dnd:dnd@localhost:5432/dnd?schema=public
+      REDIS_URL: redis://localhost:6379
+      S3_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_URL: http://localhost:9000
+      S3_ACCESS_KEY: ci
+      S3_SECRET_KEY: ci-ci-ci-ci-ci-ci
+      S3_BUCKET: dnd
+      SECRET_BOX_KEY: "00000000000000000000000000000000000000000000000000000000000000ff"
+      INVITE_HMAC_SECRET: "ci-secret-ci-secret-ci-secret-ci"
+      ASSET_IMAGE_PROVIDER: openai-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+      - run: npm ci --no-audit --no-fund
+      - run: npm audit --omit=dev
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

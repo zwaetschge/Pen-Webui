@@ -1,0 +1,45 @@
+# deps
+node_modules/
+.pnp
+.pnp.js
+
+# next
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# runtime
+*.log
+.DS_Store
+tmp/
+.claude-webui-attachments/
+.superpowers/
+.worktrees/
+worktrees/
+
+# tests
+coverage/
+playwright-report/
+test-results/
+
+# prisma
+prisma/migrations/dev.db*
+
+# docker / data
+data/
+volumes/
+
+# srd cache
+srd-cache/
+.srd-repo/
+
+# generated assets (local dev)
+public/uploads/

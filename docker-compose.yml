@@ -1,0 +1,227 @@
+# Plum Tabletop — D&D WebUI
+#
+# Assumes existing external Traefik+Authelia stack on a shared docker network.
+# Adjust TRAEFIK_NETWORK, TRAEFIK_CERTRESOLVER, and
+# TRAEFIK_AUTHELIA_MIDDLEWARE in .env to match your host.
+#
+# Routing model:
+#   - https://${APP_DOMAIN}/                → web (Authelia-protected by default)
+#   - https://${APP_DOMAIN}/play/invite/<token>/*  → web (HMAC invite, no Authelia)
+#   - https://${ASSETS_DOMAIN}/             → minio public bucket (no auth)
+
+x-common-env: &common-env
+  NODE_ENV: ${NODE_ENV:-production}
+  DATABASE_URL: postgresql://dnd:${POSTGRES_PASSWORD}@postgres:5432/dnd?schema=public
+  REDIS_URL: redis://redis:6379
+  VOCARIUM_API_URL: ${VOCARIUM_API_URL:-http://vocarium-api:8280}
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_URL: https://${ASSETS_DOMAIN}
+  S3_REGION: us-east-1
+  S3_BUCKET: dnd-assets
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+  AUTHELIA_HEADER_USER: Remote-User
+  AUTHELIA_HEADER_EMAIL: Remote-Email
+  AUTHELIA_HEADER_GROUPS: Remote-Groups
+  AUTHELIA_HEADER_NAME: Remote-Name
+  AUTHELIA_DM_GROUP: ${AUTHELIA_DM_GROUP:-dnd-dms}
+  SECRET_BOX_KEY: ${SECRET_BOX_KEY}
+  INVITE_HMAC_SECRET: ${INVITE_HMAC_SECRET}
+  DM_LLM_PROVIDER: ${DM_LLM_PROVIDER:-codex-cli}
+  CODEX_MODEL_DM: ${CODEX_MODEL_DM:-auto}
+  CODEX_EXEC_TIMEOUT_SECONDS: ${CODEX_EXEC_TIMEOUT_SECONDS:-180}
+  ASSET_IMAGE_PROVIDER: ${ASSET_IMAGE_PROVIDER:-codex-cli}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  OPENAI_MODEL_DM: ${OPENAI_MODEL_DM:-gpt-5}
+  OPENAI_MODEL_VISION: ${OPENAI_MODEL_VISION:-gpt-4o}
+  OPENAI_MODEL_EMBEDDING: ${OPENAI_MODEL_EMBEDDING:-text-embedding-3-large}
+  SETTINGS_TERMINAL_ENABLED: ${SETTINGS_TERMINAL_ENABLED:-false}
+  SETTINGS_TERMINAL_IDLE_MINUTES: ${SETTINGS_TERMINAL_IDLE_MINUTES:-15}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  APP_URL: https://${APP_DOMAIN}
+
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: plum-tabletop/web:${IMAGE_TAG:-latest}
+    container_name: dnd-web
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    volumes:
+      - codex_data:/home/nextjs/.codex
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik_proxy}"
+
+      # ── DM/Player app: protected by Authelia (default route) ──
+      - "traefik.http.routers.dnd-web.rule=Host(`${APP_DOMAIN}`)"
+      - "traefik.http.routers.dnd-web.entrypoints=websecure"
+      - "traefik.http.routers.dnd-web.tls=true"
+      - "traefik.http.routers.dnd-web.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-web.middlewares=${TRAEFIK_AUTHELIA_MIDDLEWARE:-authelia@docker},dnd-sec-headers@docker"
+      - "traefik.http.routers.dnd-web.service=dnd-web"
+      - "traefik.http.routers.dnd-web.priority=10"
+
+      # ── Player invite routes: bypass Authelia (in-app HMAC-token auth) ──
+      - "traefik.http.routers.dnd-web-invite.rule=Host(`${APP_DOMAIN}`) && ((PathPrefix(`/play/`) && !PathPrefix(`/play/sessions/`)) || PathPrefix(`/api/invite/sessions/`))"
+      - "traefik.http.routers.dnd-web-invite.entrypoints=websecure"
+      - "traefik.http.routers.dnd-web-invite.tls=true"
+      - "traefik.http.routers.dnd-web-invite.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-web-invite.middlewares=dnd-sec-headers@docker"
+      - "traefik.http.routers.dnd-web-invite.service=dnd-web"
+      - "traefik.http.routers.dnd-web-invite.priority=100"
+
+      # ── Health endpoint: bypass Authelia for monitoring ──
+      - "traefik.http.routers.dnd-web-health.rule=Host(`${APP_DOMAIN}`) && Path(`/api/health`)"
+      - "traefik.http.routers.dnd-web-health.entrypoints=websecure"
+      - "traefik.http.routers.dnd-web-health.tls=true"
+      - "traefik.http.routers.dnd-web-health.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-web-health.service=dnd-web"
+      - "traefik.http.routers.dnd-web-health.priority=200"
+
+      - "traefik.http.services.dnd-web.loadbalancer.server.port=3000"
+
+      # ── Shared security headers middleware ──
+      - "traefik.http.middlewares.dnd-sec-headers.headers.framedeny=true"
+      - "traefik.http.middlewares.dnd-sec-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.dnd-sec-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.dnd-sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.dnd-sec-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.dnd-sec-headers.headers.stsIncludeSubdomains=true"
+
+  worker:
+    build:
+      context: .
+      target: worker
+    image: plum-tabletop/worker:${IMAGE_TAG:-latest}
+    container_name: dnd-worker
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    volumes:
+      - codex_data:/home/nextjs/.codex
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    networks:
+      - internal
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dnd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dnd
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: dnd
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dnd -d dnd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: dnd-redis
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "512mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+
+  minio:
+    image: minio/minio:latest
+    container_name: dnd-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: https://${MINIO_CONSOLE_DOMAIN}
+    volumes:
+      - minio_data:/data
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik_proxy}"
+
+      # Public asset bucket (anonymous read; bucket policy enforced)
+      - "traefik.http.routers.dnd-assets.rule=Host(`${ASSETS_DOMAIN}`)"
+      - "traefik.http.routers.dnd-assets.entrypoints=websecure"
+      - "traefik.http.routers.dnd-assets.tls=true"
+      - "traefik.http.routers.dnd-assets.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-assets.service=dnd-assets"
+      - "traefik.http.services.dnd-assets.loadbalancer.server.port=9000"
+
+      # MinIO admin console (Authelia-protected, DM-only ideally)
+      - "traefik.http.routers.dnd-minio-console.rule=Host(`${MINIO_CONSOLE_DOMAIN}`)"
+      - "traefik.http.routers.dnd-minio-console.entrypoints=websecure"
+      - "traefik.http.routers.dnd-minio-console.tls=true"
+      - "traefik.http.routers.dnd-minio-console.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-minio-console.middlewares=${TRAEFIK_AUTHELIA_MIDDLEWARE:-authelia@docker}"
+      - "traefik.http.routers.dnd-minio-console.service=dnd-minio-console"
+      - "traefik.http.services.dnd-minio-console.loadbalancer.server.port=9001"
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: dnd-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+        until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do sleep 2; done;
+        mc mb -p local/dnd-assets || true;
+        mc anonymous set download local/dnd-assets;
+        echo 'minio bucket ready';
+      "
+    networks:
+      - internal
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  codex_data:
+
+networks:
+  internal:
+  traefik_proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik_proxy}

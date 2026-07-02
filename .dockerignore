@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.env
+.env.local
+.env.*.local
+data
+volumes
+.srd-repo
+srd-cache
+coverage
+playwright-report
+test-results
+Dockerfile*
+docker-compose*.yml
+README.md
+*.log
