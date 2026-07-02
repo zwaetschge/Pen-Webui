@@ -1,0 +1,2 @@
+ALTER TABLE "User" ADD COLUMN "openAIBaseUrl" TEXT;
+ALTER TABLE "User" ADD COLUMN "openAIModelDm" TEXT;
