@@ -53,6 +53,35 @@ describe("recentEvents", () => {
     expect(events.map((event) => event.id)).toEqual(["ev_1", "ev_2"]);
   });
 
+  it("includes the current bootstrap event in replay queries", async () => {
+    const { recentEvents } = await import("./bus");
+    db.findMany.mockResolvedValue([
+      {
+        id: "bootstrap_12",
+        type: "session_bootstrap_v12",
+        payload: { sceneTitle: "Opening" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:00:00.000Z"),
+      },
+    ]);
+
+    const events = await recentEvents("sess_1");
+
+    expect(db.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: { in: expect.arrayContaining(["session_bootstrap_v12"]) },
+        }),
+      }),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: "bootstrap_12",
+        type: "session_bootstrap_v12",
+      }),
+    ]);
+  });
+
   it("uses an event id cursor with a capped incremental replay limit", async () => {
     const { recentEvents } = await import("./bus");
     const cursorTs = new Date("2026-06-02T10:00:03.000Z");

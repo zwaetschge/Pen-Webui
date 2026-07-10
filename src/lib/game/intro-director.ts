@@ -39,16 +39,14 @@ export function buildIntroDirectorChapters({
   }
 
   intro.setupBeats
-    .map(clean)
-    .filter((beat): beat is string => Boolean(beat))
     .slice(0, 6)
     .forEach((beat, index) => {
       chapters.push({
         id: `beat-${index + 1}`,
         kind: "beat",
         label: `Auftakt ${index + 1}`,
-        title: headlineFromText(beat, sceneTitle),
-        body: beat,
+        title: beat.title,
+        body: beat.text,
         accent: index % 2 === 0 ? "arcane" : "brass",
       });
     });
@@ -104,7 +102,7 @@ export function introDirectorStorageKey(
     sessionId,
     intro.title,
     intro.establishingShot,
-    intro.setupBeats.join("|"),
+    intro.setupBeats.map((beat) => `${beat.title}:${beat.text}`).join("|"),
     characterKeys,
     intro.objective,
     intro.stakes,
@@ -117,40 +115,6 @@ export function introDirectorStorageKey(
 function clean(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-function headlineFromText(text: string, fallback: string) {
-  const firstSentence = text.split(/[.!?]/)[0]?.trim();
-  if (!firstSentence) return fallback;
-  const arrival = arrivalHeadline(firstSentence);
-  if (arrival) return arrival;
-  const encounter = encounterHeadline(firstSentence);
-  if (encounter) return encounter;
-
-  const compact = firstSentence.replace(/^die figur\s+/i, "").trim();
-  if (compact.length <= 36) return compact;
-  return `${compact.slice(0, 33).trimEnd()}...`;
-}
-
-function arrivalHeadline(sentence: string) {
-  const match = sentence.match(
-    /\bkommt\b.*?\b(am|im|in der|in dem|in den|in|bei der|bei dem|bei den|bei|an der|an dem|an den)\s+([A-ZÄÖÜ][^,.]{1,36}?)\s+an\b/u,
-  );
-  if (!match) return null;
-
-  const preposition = match[1];
-  const location = match[2]?.replace(/\s+/g, " ").trim();
-  if (!preposition || !location) return null;
-  return `Ankunft ${preposition} ${location}`;
-}
-
-function encounterHeadline(sentence: string) {
-  const match = sentence.match(
-    /^([A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+){0,2})\s+(empfängt|wartet|warnt|fordert|begrüßt|beobachtet|mustert|zeigt|reicht|flüstert)\b/u,
-  );
-  const name = match?.[1]?.trim();
-  if (!name || !name.includes(" ")) return null;
-  return `Begegnung mit ${name}`;
 }
 
 function hashString(value: string) {

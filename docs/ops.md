@@ -6,6 +6,22 @@
 - `curl https://dnd.example.tld/api/health` — `{"status":"ok",...}` (Authelia-bypassed by Traefik label).
 - `docker compose logs --tail=200 web worker` — scan for unhandled errors.
 
+## Schema migrations
+
+Run `npm run db:migrate:deploy` for every deployment that includes a committed
+Prisma migration. In Compose, use:
+
+```bash
+docker compose run --rm worker npm run db:migrate:deploy
+```
+
+The per-DM Codex settings migration adds `codexModelDm` and
+`codexReasoningEffort` to `User`. Values saved in `/dm/settings` override the
+`CODEX_MODEL_DM` and `CODEX_REASONING_EFFORT_DM` installation defaults on the
+next Codex DM call without a restart. Reasoning effort accepts exactly
+`minimal|low|medium|high|xhigh`. OpenAI fallback settings and asset image
+generation remain separate.
+
 ## SRD re-sync
 
 ```

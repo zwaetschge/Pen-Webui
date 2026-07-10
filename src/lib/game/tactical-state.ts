@@ -5,6 +5,7 @@ import {
   type CombatResourceEvent,
   type CombatResourceState,
 } from "./combat-resources";
+import { BOOTSTRAP_EVENT_TYPES } from "./events";
 import type { MovementTeam, MovementToken } from "./movement";
 
 const COMBAT_CLOSE_EVENTS = [
@@ -13,19 +14,7 @@ const COMBAT_CLOSE_EVENTS = [
   "session_ended",
   "scene_ended",
 ];
-const SCENE_START_EVENTS = [
-  "scene_set",
-  "session_bootstrap_v11",
-  "session_bootstrap_v10",
-  "session_bootstrap_v9",
-  "session_bootstrap_v8",
-  "session_bootstrap_v7",
-  "session_bootstrap_v6",
-  "session_bootstrap_v5",
-  "session_bootstrap_v4",
-  "session_bootstrap_v3",
-  "session_bootstrap_v2",
-];
+const SCENE_START_EVENTS = ["scene_set", ...BOOTSTRAP_EVENT_TYPES];
 
 export type CombatMoveEvent = {
   tokenId: string;

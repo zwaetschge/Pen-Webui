@@ -36,4 +36,19 @@ describe("worldbuild Codex output schema", () => {
       );
     });
   });
+
+  it("requires a title and text for every setup beat", () => {
+    const setupBeats = worldbuildOutputSchema.properties.openingScene.properties
+      .introPlan.properties.setupBeats as JsonSchema;
+
+    expect(setupBeats.items).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        text: { type: "string" },
+      },
+      required: ["title", "text"],
+    });
+  });
 });

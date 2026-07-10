@@ -18,7 +18,9 @@ import {
   combatResourceEvent,
   type CombatResourceState,
 } from "./combat-resources";
+import { isBootstrapEventType } from "./events";
 import { normalizeMovementGrid, type MovementGrid } from "./movement";
+import { normalizeOpeningBeats, type OpeningBeat } from "./opening-beat";
 
 export type ChatLine =
   | {
@@ -169,7 +171,7 @@ export type SceneState = {
 export type IntroSequenceState = {
   title?: string;
   establishingShot?: string | null;
-  setupBeats: string[];
+  setupBeats: OpeningBeat[];
   whyHere?: string | null;
   characterHookStyle?: string | null;
   characterIntros: Array<{
@@ -281,6 +283,43 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
       set((s) => rememberEvent(s, ev.id));
     }
 
+    if (isBootstrapEventType(ev.type)) {
+      set((s) => {
+        const characters = characterList(ev.payload.characters);
+        return {
+          scene: {
+            ...s.scene,
+            sceneTitle: stringField(ev.payload.sceneTitle),
+            locationId: nullableStringField(ev.payload.locationId),
+            locationName: stringField(ev.payload.locationName),
+            locationDescription: nullableStringField(
+              ev.payload.locationDescription,
+            ),
+            backgroundUrl: nullableStringField(ev.payload.backgroundUrl),
+            tacticalMapUrl: nullableStringField(ev.payload.tacticalMapUrl),
+            gridConfig: normalizeMovementGrid(ev.payload.gridConfig),
+            summary: nullableStringField(ev.payload.summary),
+            hook: nullableStringField(ev.payload.hook),
+            objective: nullableStringField(ev.payload.objective),
+            whyHere: nullableStringField(ev.payload.whyHere),
+            stakes: nullableStringField(ev.payload.stakes),
+            nextActions: stringList(ev.payload.nextActions),
+            presentNpcs: npcList(ev.payload.presentNpcs),
+            characters,
+            introSequence: introSequenceField(ev.payload.introSequence),
+          },
+          tokens: s.combat.active
+            ? s.tokens
+            : explorationTokensFromCharacters({
+                characters,
+                currentTokens: s.tokens,
+                resetPositions: false,
+              }),
+        };
+      });
+      return;
+    }
+
     switch (ev.type) {
       case "player_input": {
         const text = String(ev.payload.text ?? "");
@@ -297,51 +336,6 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
             }),
           ),
         );
-        break;
-      }
-      case "session_bootstrap_v11":
-      case "session_bootstrap_v9":
-      case "session_bootstrap_v10":
-      case "session_bootstrap_v8":
-      case "session_bootstrap_v7":
-      case "session_bootstrap_v6":
-      case "session_bootstrap_v5":
-      case "session_bootstrap_v4":
-      case "session_bootstrap_v3":
-      case "session_bootstrap_v2": {
-        set((s) => {
-          const characters = characterList(ev.payload.characters);
-          return {
-            scene: {
-              ...s.scene,
-              sceneTitle: stringField(ev.payload.sceneTitle),
-              locationId: nullableStringField(ev.payload.locationId),
-              locationName: stringField(ev.payload.locationName),
-              locationDescription: nullableStringField(
-                ev.payload.locationDescription,
-              ),
-              backgroundUrl: nullableStringField(ev.payload.backgroundUrl),
-              tacticalMapUrl: nullableStringField(ev.payload.tacticalMapUrl),
-              gridConfig: normalizeMovementGrid(ev.payload.gridConfig),
-              summary: nullableStringField(ev.payload.summary),
-              hook: nullableStringField(ev.payload.hook),
-              objective: nullableStringField(ev.payload.objective),
-              whyHere: nullableStringField(ev.payload.whyHere),
-              stakes: nullableStringField(ev.payload.stakes),
-              nextActions: stringList(ev.payload.nextActions),
-              presentNpcs: npcList(ev.payload.presentNpcs),
-              characters,
-              introSequence: introSequenceField(ev.payload.introSequence),
-            },
-            tokens: s.combat.active
-              ? s.tokens
-              : explorationTokensFromCharacters({
-                  characters,
-                  currentTokens: s.tokens,
-                  resetPositions: false,
-                }),
-          };
-        });
         break;
       }
       case "intro_sequence": {
@@ -1331,7 +1325,7 @@ function introSequenceField(value: unknown): IntroSequenceState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const obj = value as Record<string, unknown>;
   const characterIntros = introCharacterList(obj.characterIntros);
-  const setupBeats = stringArrayField(obj.setupBeats);
+  const setupBeats = normalizeOpeningBeats(obj.setupBeats);
   const nextActions = stringArrayField(obj.nextActions);
   const hasIntro =
     stringField(obj.establishingShot) ||

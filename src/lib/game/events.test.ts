@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { eventForClient } from "./events";
+import {
+  BOOTSTRAP_EVENT_TYPES,
+  CLIENT_EVENT_TYPES,
+  CURRENT_BOOTSTRAP_EVENT_TYPE,
+  eventForClient,
+} from "./events";
 import type { GameEvent } from "./bus";
 
 function event(overrides: Partial<GameEvent>): GameEvent {
@@ -13,6 +18,34 @@ function event(overrides: Partial<GameEvent>): GameEvent {
 }
 
 describe("eventForClient", () => {
+  it("exports the complete bootstrap event sequence through the current version", () => {
+    expect(CURRENT_BOOTSTRAP_EVENT_TYPE).toBe("session_bootstrap_v12");
+    expect(BOOTSTRAP_EVENT_TYPES).toEqual([
+      "session_bootstrap",
+      "session_bootstrap_v2",
+      "session_bootstrap_v3",
+      "session_bootstrap_v4",
+      "session_bootstrap_v5",
+      "session_bootstrap_v6",
+      "session_bootstrap_v7",
+      "session_bootstrap_v8",
+      "session_bootstrap_v9",
+      "session_bootstrap_v10",
+      "session_bootstrap_v11",
+      "session_bootstrap_v12",
+    ]);
+  });
+
+  it("keeps the current bootstrap event visible to live clients", () => {
+    const bootstrap = event({
+      type: "session_bootstrap_v12",
+      payload: { sceneTitle: "Opening" },
+    });
+
+    expect(CLIENT_EVENT_TYPES).toContain("session_bootstrap_v12");
+    expect(eventForClient(bootstrap, "host")).toBe(bootstrap);
+  });
+
   it("does not replay internal transcript events to clients", () => {
     expect(
       eventForClient(

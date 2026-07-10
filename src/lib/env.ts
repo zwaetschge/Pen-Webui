@@ -36,6 +36,9 @@ const schema = z.object({
       const trimmed = value?.trim();
       return trimmed && trimmed.length > 0 ? trimmed : "auto";
     }),
+  CODEX_REASONING_EFFORT_DM: z
+    .enum(["minimal", "low", "medium", "high", "xhigh"])
+    .default("medium"),
   CODEX_EXEC_TIMEOUT_SECONDS: z.coerce.number().int().min(10).default(180),
   ASSET_IMAGE_PROVIDER: z
     .enum(["codex-cli", "openai-api"])
@@ -52,6 +55,16 @@ const schema = z.object({
   OPENAI_MODEL_DM: z.string().default("gpt-5"),
   OPENAI_MODEL_VISION: z.string().default("gpt-4o"),
   OPENAI_MODEL_EMBEDDING: z.string().default("text-embedding-3-large"),
+  CODEX_WEB_RESEARCH_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true" || value === "1"),
+  ZAI_API_KEY: z.string().optional(),
+  ZAI_WEB_SEARCH_MCP_URL: z
+    .string()
+    .url()
+    .default("https://api.z.ai/api/mcp/web_search_prime/mcp"),
+  SEARXNG_URL: z.string().url().default("http://192.168.1.40/search"),
 
   SETTINGS_TERMINAL_ENABLED: z
     .string()

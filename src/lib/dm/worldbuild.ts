@@ -16,6 +16,7 @@ import { WORLDBUILD_PROMPT } from "./prompts";
 import { createOrReuseCampaignAsset } from "../asset/library";
 import { completeDmJsonObject } from "./llm";
 import { worldbuildOutputSchema } from "./worldbuild-output-schema";
+import type { LoreBible, PreparedLoreSource } from "./lore/types";
 
 export const wizardInputSchema = z.object({
   title: z.string().min(2).max(120),
@@ -106,7 +107,15 @@ const blueprintSchema = z.object({
     hook: z.string(),
     introPlan: z.object({
       establishingShot: z.string(),
-      setupBeats: z.array(z.string()).min(3).max(6),
+      setupBeats: z
+        .array(
+          z.object({
+            title: z.string().trim().min(2).max(80),
+            text: z.string().trim().min(8).max(600),
+          }),
+        )
+        .min(3)
+        .max(6),
       characterHookStyle: z.string(),
       objective: z.string(),
       stakes: z.string(),
@@ -121,7 +130,12 @@ export type Blueprint = z.infer<typeof blueprintSchema>;
 export async function draftBlueprint(
   userId: string,
   input: WizardInput,
+  opts?: { loreBible?: LoreBible },
 ): Promise<Blueprint> {
+  const loreBlock = opts?.loreBible
+    ? `\nLORE BIBLE:\n${JSON.stringify(opts.loreBible, null, 2)}\n`
+    : "";
+
   const userMsg = `Design a campaign for the following brief.
 
 TITLE: ${input.title}
@@ -131,6 +145,7 @@ PARTY: ${input.partySize} characters at level ${input.partyLevel}
 TARGET SESSION LENGTH: ${input.sessionLengthHours}h
 HOUSE RULES: ${input.houseRules ?? "(none)"}
 SEED IDEAS: ${input.seedIdeas ?? "(none)"}
+${loreBlock}
 
 Output the JSON blueprint per the schema. No markdown.`;
 
@@ -151,6 +166,8 @@ export async function commitBlueprint(opts: {
   hostId: string;
   input: WizardInput;
   blueprint: Blueprint;
+  loreBible?: LoreBible;
+  loreSources?: PreparedLoreSource[];
 }): Promise<{ campaignId: string }> {
   const { hostId, input, blueprint: bp } = opts;
 
@@ -168,10 +185,28 @@ export async function commitBlueprint(opts: {
           factions: bp.factions as never,
           worldFacts: [] as never,
           threads: bp.plot.branchingPoints as never,
+          loreBible: (opts.loreBible ?? {}) as never,
         },
       },
     },
   });
+
+  if (opts.loreSources?.length) {
+    await prisma.campaignLoreSource.createMany({
+      data: opts.loreSources.map((source) => ({
+        campaignId: campaign.id,
+        kind: source.kind,
+        status: "ready",
+        title: source.title,
+        sourceUrl: source.sourceUrl,
+        contentHash: source.contentHash,
+        rawText: source.kind === "upload" ? source.rawText : null,
+        summary: source.summary || source.rawText?.slice(0, 2000) || "",
+        facts: source.facts as never,
+        citations: source.citations as never,
+      })),
+    });
+  }
 
   // Map blueprint IDs → DB IDs for cross-references.
   const npcIdMap = new Map<string, string>();

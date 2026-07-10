@@ -15,6 +15,7 @@ import { env } from "../env";
 import { logger } from "../logger";
 import { resolveOpenAIFallbackConfig } from "../openai";
 import { buildCodexExecArgs } from "./codex-args";
+import { codexDmSettings, type CodexDmSettings } from "./codex-settings";
 
 const MAX_PROCESS_OUTPUT_CHARS = 512_000;
 
@@ -195,8 +196,10 @@ async function completeCodexChat(
     "CONVERSATION:\n" + renderMessages(opts.messages),
   ].join("\n\n");
 
+  const settings = await codexDmSettings(opts.userId);
   const raw = await runCodexExec({
     prompt,
+    settings,
     outputSchema: {
       type: "object",
       additionalProperties: false,
@@ -222,7 +225,7 @@ async function completeCodexChat(
   const parsed = codexChatSchema.parse(parseModelJson(raw));
   return {
     provider: "codex-cli",
-    model: env().CODEX_MODEL_DM,
+    model: settings.effectiveModel,
     content: parsed.content,
     toolCalls: parsed.tool_calls.map((call) => ({
       id: call.id ?? `call_${randomUUID().replace(/-/g, "")}`,
@@ -250,15 +253,18 @@ async function completeCodexJsonObject(
     "USER REQUEST:\n" + opts.user,
   ].join("\n\n");
 
+  const settings = await codexDmSettings(opts.userId);
   const raw = await runCodexExec({
     prompt,
     outputSchema: opts.outputSchema,
+    settings,
   });
   return { value: parseModelJson(raw) };
 }
 
 async function runCodexExec(opts: {
   prompt: string;
+  settings: CodexDmSettings;
   outputSchema?: Record<string, unknown>;
 }) {
   const dir = await mkdtemp(path.join(tmpdir(), "plum-codex-"));
@@ -275,7 +281,8 @@ async function runCodexExec(opts: {
         cwd: dir,
         schemaPath,
         outputPath,
-        model: env().CODEX_MODEL_DM,
+        model: opts.settings.effectiveModel,
+        reasoningEffort: opts.settings.effectiveReasoningEffort,
       }),
       opts.prompt,
       env().CODEX_EXEC_TIMEOUT_SECONDS * 1000,

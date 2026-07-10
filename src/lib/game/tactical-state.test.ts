@@ -126,6 +126,15 @@ describe("activeCombatTokensForSession", () => {
         },
       ],
     });
+    expect(db.findFirst).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: {
+          sessionId: "sess_1",
+          type: { in: expect.arrayContaining(["session_bootstrap_v12"]) },
+        },
+      }),
+    );
   });
 
   it("sums movement costs for one token in the active turn", async () => {

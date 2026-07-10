@@ -74,6 +74,11 @@ echo "TRAEFIK_CERTRESOLVER=letsencrypt"           >> .env
 echo "TRAEFIK_AUTHELIA_MIDDLEWARE=authelia@docker" >> .env
 ```
 
+`CODEX_MODEL_DM` and `CODEX_REASONING_EFFORT_DM` are installation defaults.
+A DM's model and reasoning effort saved in `/dm/settings` override them on the
+next Codex DM call without a restart. OpenAI fallback settings and asset image
+generation remain separate.
+
 ### 2. Configure Authelia
 
 Add an access-control rule that protects the DM/players surface but lets

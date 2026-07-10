@@ -26,6 +26,8 @@ model User {
   encOpenAIKey  Bytes?
   openAIBaseUrl String?
   openAIModelDm String?
+  codexModelDm         String?
+  codexReasoningEffort String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   lastSeenAt    DateTime @default(now())
@@ -44,6 +46,16 @@ enum CampaignStatus {
   ready // playable
   playing // session live
   archived
+}
+
+enum LoreSourceKind {
+  upload
+  web_research
+}
+
+enum LoreSourceStatus {
+  ready
+  failed
 }
 
 model Campaign {
@@ -70,6 +82,7 @@ model Campaign {
   assets     Asset[]
   invites    Invite[]
   voiceAssignments VoiceAssignment[]
+  loreSources CampaignLoreSource[]
 
   @@index([hostId])
   @@index([status])
@@ -82,7 +95,29 @@ model CampaignWorld {
   factions   Json     @default("[]")
   worldFacts Json     @default("[]")
   threads    Json     @default("[]") // active plot threads
+  loreBible  Json     @default("{}")
   updatedAt  DateTime @updatedAt
+}
+
+model CampaignLoreSource {
+  id          String           @id @default(cuid())
+  campaignId  String
+  campaign    Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  kind        LoreSourceKind
+  status      LoreSourceStatus @default(ready)
+  title       String
+  sourceUrl   String?
+  contentHash String
+  rawText     String?          @db.Text
+  summary     String           @db.Text
+  facts       Json             @default("[]")
+  citations   Json             @default("[]")
+  errorMsg    String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([campaignId, kind])
+  @@index([contentHash])
 }
 
 // ─── Character / NPC ──────────────────────────────────────────────
