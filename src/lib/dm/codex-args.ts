@@ -1,8 +1,11 @@
+import type { CodexReasoningEffort } from "./codex-settings";
+
 export function buildCodexExecArgs(opts: {
   cwd: string;
   schemaPath?: string | null;
   outputPath: string;
   model: string;
+  reasoningEffort: CodexReasoningEffort;
 }) {
   return [
     "--ask-for-approval",
@@ -18,6 +21,8 @@ export function buildCodexExecArgs(opts: {
     "--color",
     "never",
     ...codexModelArgs(opts.model),
+    "-c",
+    `model_reasoning_effort=${JSON.stringify(opts.reasoningEffort)}`,
     ...codexOutputSchemaArgs(opts.schemaPath),
     "--output-last-message",
     opts.outputPath,

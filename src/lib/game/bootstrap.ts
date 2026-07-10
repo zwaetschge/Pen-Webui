@@ -1,24 +1,20 @@
 import { prisma } from "@/lib/db";
 import { publishEvent } from "./bus";
+import {
+  CURRENT_BOOTSTRAP_EVENT_TYPE,
+  LEGACY_BOOTSTRAP_EVENT_TYPES,
+} from "./events";
+import {
+  normalizeOpeningBeats,
+  openingBeatFromLegacy,
+  type OpeningBeat,
+} from "./opening-beat";
 
 type JsonRecord = Record<string, unknown>;
-const BOOTSTRAP_TYPE = "session_bootstrap_v11";
-const LEGACY_BOOTSTRAP_TYPES = [
-  "session_bootstrap",
-  "session_bootstrap_v2",
-  "session_bootstrap_v3",
-  "session_bootstrap_v4",
-  "session_bootstrap_v5",
-  "session_bootstrap_v6",
-  "session_bootstrap_v7",
-  "session_bootstrap_v8",
-  "session_bootstrap_v9",
-  "session_bootstrap_v10",
-];
 
 export async function ensureSessionBootstrap(sessionId: string) {
   const existing = await prisma.eventLog.findFirst({
-    where: { sessionId, type: BOOTSTRAP_TYPE },
+    where: { sessionId, type: CURRENT_BOOTSTRAP_EVENT_TYPE },
     select: { id: true },
   });
   if (existing) return false;
@@ -27,7 +23,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
     where: {
       sessionId,
       type: {
-        in: LEGACY_BOOTSTRAP_TYPES,
+        in: LEGACY_BOOTSTRAP_EVENT_TYPES,
       },
     },
     orderBy: { ts: "desc" },
@@ -148,7 +144,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
     }),
   });
   const bootstrapPayload = {
-    version: 11,
+    version: 12,
     campaignTitle: session.campaign.title,
     theme: session.campaign.theme,
     sceneTitle: opening?.title ?? "Auftakt",
@@ -174,7 +170,11 @@ export async function ensureSessionBootstrap(sessionId: string) {
     introSequence,
   };
 
-  await publishEvent(sessionId, BOOTSTRAP_TYPE, bootstrapPayload);
+  await publishEvent(
+    sessionId,
+    CURRENT_BOOTSTRAP_EVENT_TYPE,
+    bootstrapPayload,
+  );
 
   if (location) {
     await publishEvent(sessionId, "scene_set", {
@@ -215,7 +215,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
 
 type OpeningIntroPlan = {
   establishingShot: string | null;
-  setupBeats: string[];
+  setupBeats: OpeningBeat[];
   characterHookStyle: string | null;
   objective: string | null;
   stakes: string | null;
@@ -235,7 +235,7 @@ function parseIntroPlan(value: unknown): OpeningIntroPlan {
   const raw = asRecord(value);
   return {
     establishingShot: stringOrNull(raw.establishingShot),
-    setupBeats: stringArray(raw.setupBeats).slice(0, 6),
+    setupBeats: normalizeOpeningBeats(raw.setupBeats),
     characterHookStyle: stringOrNull(raw.characterHookStyle),
     objective: stringOrNull(raw.objective),
     stakes: stringOrNull(raw.stakes),
@@ -243,7 +243,7 @@ function parseIntroPlan(value: unknown): OpeningIntroPlan {
   };
 }
 
-function buildIntroSequence(input: {
+export function buildIntroSequence(input: {
   sceneTitle: string;
   introPlan: OpeningIntroPlan;
   brief: ReturnType<typeof buildOpeningBrief>;
@@ -293,8 +293,11 @@ function buildSetupBeats(input: {
   presentNpcNames: string[];
 }) {
   const planned = input.introPlan.setupBeats
-    .map(playerFacingGerman)
-    .filter((beat): beat is string => Boolean(beat))
+    .flatMap((beat) => {
+      const title = playerFacingGerman(beat.title);
+      const text = playerFacingGerman(beat.text);
+      return title && text ? [{ title, text }] : [];
+    })
     .slice(0, 6);
   const npcNames = input.presentNpcNames.slice(0, 3);
   const fallback = [
@@ -303,7 +306,12 @@ function buildSetupBeats(input: {
     npcNames.length > 0
       ? `${npcNames.join(", ")} ${npcNames.length === 1 ? "ist" : "sind"} bereits in der Nähe, aber noch ist nicht klar, wem ihr trauen könnt.`
       : null,
-  ].filter((beat): beat is string => Boolean(beat));
+  ]
+    .filter((beat): beat is string => Boolean(beat))
+    .flatMap((beat, index) => {
+      const normalized = openingBeatFromLegacy(beat, planned.length + index);
+      return normalized ? [normalized] : [];
+    });
   return [...planned, ...fallback].slice(0, 6);
 }
 
@@ -337,7 +345,7 @@ function buildIntroNarrationBeats(
 ) {
   return [
     input.establishingShot,
-    ...input.setupBeats,
+    ...input.setupBeats.map((beat) => beat.text),
     ...input.characterIntros.map((intro) => intro.text),
     `Euer erstes Ziel: ${input.objective}`,
     `Der Einsatz: ${input.stakes}`,
@@ -586,7 +594,7 @@ async function archiveLegacyBootstrap(sessionId: string, ts: Date) {
     where: {
       sessionId,
       type: {
-        in: [...LEGACY_BOOTSTRAP_TYPES, "scene_set", "narrate"],
+        in: [...LEGACY_BOOTSTRAP_EVENT_TYPES, "scene_set", "narrate"],
       },
       ts: {
         gte: ts,

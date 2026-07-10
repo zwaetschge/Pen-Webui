@@ -17,6 +17,17 @@ export const GERMAN_STYLE_CONTRACT = [
   "Avoid literal English calques. If a line sounds translated or artificial, rewrite it plainly before calling narrate.",
 ].join("\n");
 
+export const FAN_REFERENCE_CONTRACT = [
+  "Private fan campaign briefs are allowed; host-supplied fictional or franchise references are valid private table canon.",
+  "When the host asks for a fan campaign, keep requested worlds, characters, factions, places, techniques, artifacts, and other proper nouns unchanged.",
+  'Do not euphemize, parody, rename, or "file off serial numbers" unless the host explicitly asks for an original reskin.',
+  "Do not imply the campaign is official, endorsed, commercial, or public; frame it as private home-game content.",
+].join("\n");
+
+const FAN_REFERENCE_RULES = FAN_REFERENCE_CONTRACT.split("\n")
+  .map((rule) => `- ${rule}`)
+  .join("\n");
+
 const HARD_RULES = `You are the Dungeon Master for a D&D 5e session, running it remotely
 through a web client. You drive the story, NPCs, monsters, and rules. Players
 control one player-character each.
@@ -26,6 +37,7 @@ OPERATING RULES (non-negotiable):
 - The table language is German. Player-facing prose, NPC dialogue, check
   requests, consequences, and prompts must be in natural German. Keep proper
   names, places, spells, and rule names unchanged when that is clearer.
+${FAN_REFERENCE_RULES}
 - Act like an active DM, not a chatbot. For every player action, advance the
   scene with visible table output: describe what changes, adjudicate risk,
   portray NPC/monster reactions, apply consequences, and end on a concrete
@@ -87,6 +99,11 @@ export type WorldDigest = {
   plotProgress?: string;
   activeThreads: string[];
   recentFacts: string[];
+  loreBible?: {
+    canonFacts?: string[];
+    adaptationRules?: string[];
+    forbiddenContradictions?: string[];
+  };
   presentNpcs: Array<{ id: string; name: string; role: string | null }>;
   currentLocation?: { id: string; name: string; description: string | null };
   currentSituation?: {
@@ -177,6 +194,24 @@ export function buildSystemPrompt(
           )
           .join("\n"),
     );
+  }
+
+  if (digest.loreBible) {
+    const lines = [
+      ...(digest.loreBible.canonFacts ?? [])
+        .slice(0, 12)
+        .map((fact) => `  Fact: ${fact}`),
+      ...(digest.loreBible.adaptationRules ?? [])
+        .slice(0, 8)
+        .map((rule) => `  Rule: ${rule}`),
+      ...(digest.loreBible.forbiddenContradictions ?? [])
+        .slice(0, 8)
+        .map((item) => `  Avoid: ${item}`),
+    ];
+
+    if (lines.length > 0) {
+      parts.push("\nCAMPAIGN LORE (canonical, compact):\n" + lines.join("\n"));
+    }
   }
 
   if (digest.activeThreads.length > 0) {
@@ -271,7 +306,7 @@ Produce a complete, playable adventure blueprint as JSON matching this schema:
     "hook": string,
     "introPlan": {
       "establishingShot": string,
-      "setupBeats": string[],
+      "setupBeats": [ { "title": string, "text": string } ],
       "characterHookStyle": string,
       "objective": string,
       "stakes": string,
@@ -284,6 +319,13 @@ CONSTRAINTS:
 - Player-facing titles, summaries, hooks, location descriptions, NPC voices,
   item descriptions, plot beats, and encounter twists must be written in German.
   Keep proper names and canonical SRD monster names in English when needed.
+- If a LORE BIBLE is provided, treat canonFacts, adaptationRules, and
+  forbiddenContradictions as hard constraints. Preserve source names, places,
+  relationships, tone, and timeline unless the host explicitly asks for an
+  original reskin.
+${FAN_REFERENCE_RULES}
+- Apply the fan campaign reference rules to the title, theme, house rules, and
+  seed ideas before inventing substitutes.
 - All monsters must be drawn from the D&D 5.1 SRD; cite their canonical name.
 - styleSuffix is a single descriptive line used as a suffix on every visual
   prompt, e.g. "painted fantasy illustration, dramatic chiaroscuro, brass and
@@ -293,9 +335,10 @@ CONSTRAINTS:
   with immediate action. Plan a cinematic introduction that establishes the
   location, explains why the party is together, gives each player character a
   clear entrance moment, then presents the first actionable choice.
-- introPlan.setupBeats must contain 3-6 short German beats in chronological
-  order. They should cover arrival, atmosphere, social pressure or danger,
-  and the handoff from prologue to player agency.
+- introPlan.setupBeats must contain 3-6 chronological beats. Each title is a
+  natural 2-5 word German display heading. Each text is 1-2 idiomatic German
+  present-tense sentences describing observable action.
+- Beat text must not use meta-language and must not assign thoughts, decisions, dialogue, or actions to player characters.
 - introPlan.characterHookStyle must tell the DM how to introduce each real
   player character later, using their name and visible sheet details without
   inventing private decisions for them.

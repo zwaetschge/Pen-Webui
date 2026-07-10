@@ -2,17 +2,39 @@ import type { GameEvent } from "./bus";
 
 export type ClientRole = "host" | "player";
 
-export const CLIENT_EVENT_TYPES = [
-  "session_bootstrap_v11",
-  "session_bootstrap_v10",
-  "session_bootstrap_v9",
-  "session_bootstrap_v8",
-  "session_bootstrap_v7",
-  "session_bootstrap_v6",
-  "session_bootstrap_v5",
-  "session_bootstrap_v4",
-  "session_bootstrap_v3",
+export const CURRENT_BOOTSTRAP_EVENT_TYPE = "session_bootstrap_v12";
+
+export const BOOTSTRAP_EVENT_TYPES = [
+  "session_bootstrap",
   "session_bootstrap_v2",
+  "session_bootstrap_v3",
+  "session_bootstrap_v4",
+  "session_bootstrap_v5",
+  "session_bootstrap_v6",
+  "session_bootstrap_v7",
+  "session_bootstrap_v8",
+  "session_bootstrap_v9",
+  "session_bootstrap_v10",
+  "session_bootstrap_v11",
+  CURRENT_BOOTSTRAP_EVENT_TYPE,
+] as const;
+
+export type BootstrapEventType = (typeof BOOTSTRAP_EVENT_TYPES)[number];
+
+const BOOTSTRAP_EVENT_TYPE_SET = new Set<string>(BOOTSTRAP_EVENT_TYPES);
+
+export function isBootstrapEventType(
+  value: string,
+): value is BootstrapEventType {
+  return BOOTSTRAP_EVENT_TYPE_SET.has(value);
+}
+
+export const LEGACY_BOOTSTRAP_EVENT_TYPES = BOOTSTRAP_EVENT_TYPES.filter(
+  (type) => type !== CURRENT_BOOTSTRAP_EVENT_TYPE,
+);
+
+export const CLIENT_EVENT_TYPES = [
+  ...BOOTSTRAP_EVENT_TYPES,
   "player_input",
   "intro_sequence",
   "narrate",

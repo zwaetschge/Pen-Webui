@@ -1,118 +1,174 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalPanel } from "./TerminalPanel";
-
-type SettingsState = {
-  hasOpenAIKey: boolean;
-  hasGlobalOpenAIKey: boolean;
-  llm: {
-    provider: "codex-cli" | "openai-api";
-    codexModel: string;
-    apiFallbackModel: string;
-  };
-  assets: {
-    provider: "codex-cli" | "openai-api";
-  };
-  codex: {
-    available: boolean;
-    authenticated: boolean;
-    detail: string;
-  };
-  fallback: {
-    hasUserKey: boolean;
-    hasGlobalKey: boolean;
-    userBaseUrl: string | null;
-    userModelDm: string | null;
-    effectiveBaseUrl: string;
-    effectiveModelDm: string;
-    configured: boolean;
-  };
-  terminal: {
-    enabled: boolean;
-    idleMinutes: number;
-  };
-};
+import {
+  createSettingsRequestGate,
+  requestSettings,
+  type SettingsState,
+} from "./settings-request";
 
 export function SettingsForm() {
+  const requestGate = useRef(createSettingsRequestGate());
   const [settings, setSettings] = useState<SettingsState | null>(null);
+  const [requestPending, setRequestPending] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [modelInput, setModelInput] = useState("");
+  const [codexModelInput, setCodexModelInput] = useState("");
+  const [codexEffortInput, setCodexEffortInput] = useState("");
+  const [codexMsg, setCodexMsg] = useState<string | null>(null);
+  const [codexErr, setCodexErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
-    const data = await fetch("/api/dm/settings")
-      .then((r) => r.json())
-      .catch(() => null);
-    if (!data) {
-      setSettings(null);
-      return;
+    if (!requestGate.current.acquire()) return;
+
+    setRequestPending(true);
+    setLoadError(null);
+
+    try {
+      const data = await requestSettings();
+      setSettings(data);
+      setBaseUrlInput(
+        data.fallback.userBaseUrl ?? data.fallback.effectiveBaseUrl,
+      );
+      setModelInput(
+        data.fallback.userModelDm ?? data.fallback.effectiveModelDm,
+      );
+      setCodexModelInput(data.codexRuntime.userModel ?? "");
+      setCodexEffortInput(data.codexRuntime.userReasoningEffort ?? "");
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load settings.",
+      );
+    } finally {
+      requestGate.current.release();
+      setRequestPending(false);
     }
-    setSettings(data);
-    setBaseUrlInput(
-      data.fallback?.userBaseUrl ?? data.fallback?.effectiveBaseUrl ?? "",
-    );
-    setModelInput(
-      data.fallback?.userModelDm ?? data.fallback?.effectiveModelDm ?? "",
-    );
   }, []);
 
   useEffect(() => {
     void loadSettings();
   }, [loadSettings]);
 
+  async function saveCodex() {
+    if (!requestGate.current.acquire()) return;
+
+    setRequestPending(true);
+    setCodexMsg(null);
+    setCodexErr(null);
+
+    try {
+      const body = await requestSettings({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          codexModelDm: codexModelInput.trim() || null,
+          codexReasoningEffort: codexEffortInput || null,
+        }),
+      });
+
+      setSettings((current) =>
+        current
+          ? {
+              ...current,
+              codexRuntime: body.codexRuntime,
+              llm: {
+                ...current.llm,
+                codexModel: body.codexRuntime.effectiveModel,
+              },
+            }
+          : current,
+      );
+      setCodexModelInput(body.codexRuntime.userModel ?? "");
+      setCodexEffortInput(body.codexRuntime.userReasoningEffort ?? "");
+      setCodexMsg("Codex settings saved.");
+    } catch (error) {
+      setCodexErr(
+        error instanceof Error ? error.message : "Codex settings failed",
+      );
+    } finally {
+      requestGate.current.release();
+      setRequestPending(false);
+    }
+  }
+
   async function saveFallback() {
+    if (!requestGate.current.acquire()) return;
+
+    setRequestPending(true);
     setMsg(null);
     setErr(null);
-    const r = await fetch("/api/dm/settings", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        openaiKey: keyInput || undefined,
-        openaiBaseUrl: baseUrlInput,
-        openaiModelDm: modelInput,
-      }),
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      setErr(j.error ?? "failed");
-      return;
+
+    try {
+      const body = await requestSettings({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          openaiKey: keyInput || undefined,
+          openaiBaseUrl: baseUrlInput,
+          openaiModelDm: modelInput,
+        }),
+      });
+      setSettings((current) =>
+        current
+          ? {
+              ...current,
+              fallback: body.fallback,
+              hasOpenAIKey: body.hasOpenAIKey,
+              llm: {
+                ...current.llm,
+                apiFallbackModel: body.fallback.effectiveModelDm,
+              },
+            }
+          : current,
+      );
+      setKeyInput("");
+      setMsg("Saved.");
+    } catch (error) {
+      setErr(
+        error instanceof Error ? error.message : "Fallback settings failed.",
+      );
+    } finally {
+      requestGate.current.release();
+      setRequestPending(false);
     }
-    setSettings((prev) =>
-      prev
-        ? {
-            ...prev,
-            fallback: j.fallback,
-            hasOpenAIKey: !!j.hasOpenAIKey,
-            llm: { ...prev.llm, apiFallbackModel: j.fallback.effectiveModelDm },
-          }
-        : prev,
-    );
-    setKeyInput("");
-    setMsg("Saved.");
   }
 
   async function clear() {
+    if (!requestGate.current.acquire()) return;
+
+    setRequestPending(true);
     setMsg(null);
     setErr(null);
-    const r = await fetch("/api/dm/settings", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ clearKey: true }),
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      setErr(j.error ?? "failed");
-      return;
+
+    try {
+      const body = await requestSettings({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clearKey: true }),
+      });
+      setSettings((current) =>
+        current
+          ? {
+              ...current,
+              fallback: body.fallback,
+              hasOpenAIKey: body.hasOpenAIKey,
+            }
+          : current,
+      );
+      setMsg("Cleared.");
+    } catch (error) {
+      setErr(
+        error instanceof Error ? error.message : "Unable to clear the API key.",
+      );
+    } finally {
+      requestGate.current.release();
+      setRequestPending(false);
     }
-    setSettings((prev) =>
-      prev
-        ? { ...prev, fallback: j.fallback, hasOpenAIKey: !!j.hasOpenAIKey }
-        : prev,
-    );
-    setMsg("Cleared.");
   }
 
   const fallbackState =
@@ -123,6 +179,29 @@ export function SettingsForm() {
           ? "ready with saved key"
           : "ready with env key"
         : "not configured";
+
+  if (settings === null) {
+    return (
+      <section className="panel space-y-3 p-6">
+        <h2 className="font-display text-lg text-parchment-100">DM settings</h2>
+        {loadError ? (
+          <>
+            <p className="text-xs text-blood-500">{loadError}</p>
+            <button
+              type="button"
+              disabled={requestPending}
+              onClick={() => void loadSettings()}
+              className="rounded-md border border-brass-700/40 bg-ink-600/40 px-3 py-2 text-xs text-parchment-100 hover:bg-ink-500/50 disabled:opacity-50"
+            >
+              Retry
+            </button>
+          </>
+        ) : (
+          <p className="text-xs text-ink-100">Loading settings.</p>
+        )}
+      </section>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -141,6 +220,11 @@ export function SettingsForm() {
                 ? settings?.llm.apiFallbackModel
                 : settings?.llm.codexModel}
             </div>
+            {settings?.llm.provider === "codex-cli" ? (
+              <div className="mt-1 text-ink-100">
+                Reasoning: {settings.codexRuntime.effectiveReasoningEffort}
+              </div>
+            ) : null}
           </div>
           <div className="rounded-md border border-brass-700/40 bg-ink-600/60 p-3">
             <div className="text-ink-100">Codex login</div>
@@ -196,11 +280,74 @@ export function SettingsForm() {
         </div>
         <button
           type="button"
+          disabled={requestPending}
           onClick={() => void loadSettings()}
-          className="rounded-md border border-brass-700/40 bg-ink-600/40 px-3 py-2 text-xs text-parchment-100 hover:bg-ink-500/50"
+          className="rounded-md border border-brass-700/40 bg-ink-600/40 px-3 py-2 text-xs text-parchment-100 hover:bg-ink-500/50 disabled:opacity-50"
         >
           Refresh status
         </button>
+        {loadError ? (
+          <p className="text-xs text-blood-500">{loadError}</p>
+        ) : null}
+      </section>
+
+      <section className="panel space-y-4 p-6">
+        <h2 className="font-display text-lg text-parchment-100">Codex CLI</h2>
+        <p className="text-xs text-ink-100">
+          Override the Codex model and reasoning effort for your DM turns. Blank
+          values use the installation defaults and do not change the OpenAI API
+          fallback.
+        </p>
+
+        <div className="grid gap-3 md:grid-cols-[1.3fr_0.7fr]">
+          <label className="space-y-1 text-xs text-ink-100">
+            <span>Model</span>
+            <input
+              type="text"
+              disabled={requestPending}
+              value={codexModelInput}
+              onChange={(event) => setCodexModelInput(event.target.value)}
+              placeholder={
+                settings?.codexRuntime.effectiveModel ?? "Installation default"
+              }
+              maxLength={120}
+              className="w-full rounded-md border border-brass-700/40 bg-ink-500/70 px-3 py-2 text-sm text-parchment-100 focus:border-brass-400/60 focus:outline-none"
+            />
+          </label>
+          <label className="space-y-1 text-xs text-ink-100">
+            <span>Reasoning effort</span>
+            <select
+              disabled={requestPending}
+              value={codexEffortInput}
+              onChange={(event) => setCodexEffortInput(event.target.value)}
+              className="w-full rounded-md border border-brass-700/40 bg-ink-500/70 px-3 py-2 text-sm text-parchment-100 focus:border-brass-400/60 focus:outline-none"
+            >
+              <option value="">Installation default</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="text-xs text-ink-100">
+          Effective: {settings?.codexRuntime.effectiveModel ?? "..."}, reasoning{" "}
+          {settings?.codexRuntime.effectiveReasoningEffort ?? "..."}
+        </div>
+
+        <button
+          type="button"
+          disabled={requestPending}
+          onClick={() => void saveCodex()}
+          className="rounded-md border border-arcane-500/60 bg-arcane-600/30 px-3 py-2 text-sm text-parchment-100 hover:bg-arcane-500/40 disabled:opacity-50"
+        >
+          Save Codex settings
+        </button>
+
+        {codexMsg ? <p className="text-xs text-brass-300">{codexMsg}</p> : null}
+        {codexErr ? <p className="text-xs text-blood-500">{codexErr}</p> : null}
       </section>
 
       <section className="panel space-y-4 p-6">
@@ -228,6 +375,7 @@ export function SettingsForm() {
             <span>API URL</span>
             <input
               type="url"
+              disabled={requestPending}
               value={baseUrlInput}
               onChange={(e) => setBaseUrlInput(e.target.value)}
               placeholder="https://api.openai.com/v1"
@@ -238,6 +386,7 @@ export function SettingsForm() {
             <span>Model</span>
             <input
               type="text"
+              disabled={requestPending}
               value={modelInput}
               onChange={(e) => setModelInput(e.target.value)}
               placeholder="gpt-5"
@@ -249,6 +398,7 @@ export function SettingsForm() {
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             type="password"
+            disabled={requestPending}
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
             placeholder="API key"
@@ -256,7 +406,7 @@ export function SettingsForm() {
           />
           <button
             type="button"
-            disabled={!baseUrlInput || !modelInput}
+            disabled={requestPending || !baseUrlInput || !modelInput}
             onClick={saveFallback}
             className="rounded-md border border-arcane-500/60 bg-arcane-600/30 px-3 py-2 text-sm text-parchment-100 hover:bg-arcane-500/40 disabled:opacity-50"
           >
@@ -265,8 +415,9 @@ export function SettingsForm() {
           {settings?.fallback.hasUserKey ? (
             <button
               type="button"
+              disabled={requestPending}
               onClick={clear}
-              className="rounded-md border border-blood-500/40 bg-blood-600/20 px-3 py-2 text-sm text-blood-500 hover:bg-blood-600/30"
+              className="rounded-md border border-blood-500/40 bg-blood-600/20 px-3 py-2 text-sm text-blood-500 hover:bg-blood-600/30 disabled:opacity-50"
             >
               Clear
             </button>

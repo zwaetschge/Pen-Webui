@@ -6,7 +6,7 @@ export function SceneBrief() {
   const scene = useGame((s) => s.scene);
   const intro = scene.introSequence;
   const nextActions = scene.nextActions ?? [];
-  const introBeats = intro?.setupBeats ?? [];
+  const introBeats = intro?.setupBeats.map((beat) => beat.text) ?? [];
   const characterIntros = intro?.characterIntros ?? [];
   const hasBrief =
     intro ||

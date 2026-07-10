@@ -1,4 +1,5 @@
 import { prisma } from "../db";
+import { BOOTSTRAP_EVENT_TYPES } from "../game/events";
 import type { WorldDigest, PersonaConfig } from "./prompts";
 
 const DIGEST_NPC_LIMIT = 40;
@@ -18,7 +19,7 @@ export async function buildDigest(
           theme: true,
           tone: true,
           systemPromptOverride: true,
-          world: { select: { worldFacts: true, threads: true } },
+          world: { select: { worldFacts: true, threads: true, loreBible: true } },
         },
       }),
       prisma.scene.findFirst({
@@ -36,19 +37,7 @@ export async function buildDigest(
             where: {
               sessionId,
               type: {
-                in: [
-                  "scene_set",
-                  "session_bootstrap_v11",
-                  "session_bootstrap_v10",
-                  "session_bootstrap_v9",
-                  "session_bootstrap_v8",
-                  "session_bootstrap_v7",
-                  "session_bootstrap_v6",
-                  "session_bootstrap_v5",
-                  "session_bootstrap_v4",
-                  "session_bootstrap_v3",
-                  "session_bootstrap_v2",
-                ],
+                in: ["scene_set", ...BOOTSTRAP_EVENT_TYPES],
               },
             },
             orderBy: { ts: "desc" },
@@ -107,6 +96,7 @@ export async function buildDigest(
     plotProgress: undefined,
     activeThreads: threads,
     recentFacts: worldFacts,
+    loreBible: loreExcerpt(world?.loreBible),
     currentLocation: location
       ? {
           id: location.id,
@@ -232,4 +222,30 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function loreExcerpt(value: unknown): WorldDigest["loreBible"] | undefined {
+  const source =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  if (!source) return undefined;
+
+  const canonFacts = stringArray(source.canonFacts);
+  const adaptationRules = stringArray(source.adaptationRules);
+  const forbiddenContradictions = stringArray(source.forbiddenContradictions);
+
+  if (
+    canonFacts.length === 0 &&
+    adaptationRules.length === 0 &&
+    forbiddenContradictions.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    canonFacts,
+    adaptationRules,
+    forbiddenContradictions,
+  };
 }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { BOOTSTRAP_EVENT_TYPES } from "./events";
 import { useGame, type ServerEvent } from "./store";
 
 function event(overrides: Partial<ServerEvent>): ServerEvent {
@@ -35,6 +36,48 @@ describe("game store event ingestion", () => {
 
     expect(useGame.getState().chat).toHaveLength(1);
   });
+
+  it("normalizes legacy string setup beats from an unversioned bootstrap", () => {
+    const legacyText =
+      "Im Diner Zur Grauen Wolldecke mustert Elinor Hale die Fremden.";
+
+    useGame.getState().ingest(
+      event({
+        id: "legacy_unversioned_intro",
+        type: "session_bootstrap",
+        payload: {
+          introSequence: {
+            establishingShot: "Regen liegt ueber Cypress Hollow.",
+            setupBeats: [legacyText],
+            characterIntros: [],
+            nextActions: [],
+          },
+        },
+      }),
+    );
+
+    expect(useGame.getState().scene.introSequence?.setupBeats).toEqual([
+      {
+        title: "Begegnung mit Elinor Hale",
+        text: legacyText,
+      },
+    ]);
+  });
+
+  it.each(BOOTSTRAP_EVENT_TYPES)(
+    "consumes %s through the shared bootstrap contract",
+    (type) => {
+      useGame.getState().ingest(
+        event({
+          id: `bootstrap_${type}`,
+          type,
+          payload: { sceneTitle: `Scene for ${type}` },
+        }),
+      );
+
+      expect(useGame.getState().scene.sceneTitle).toBe(`Scene for ${type}`);
+    },
+  );
 
   it("keeps individual dice values for the 3d dice overlay", () => {
     useGame.getState().ingest(
@@ -209,6 +252,59 @@ describe("game store event ingestion", () => {
     expect(useGame.getState().scene.objective).toBe("Sichert die Brücke.");
     expect(useGame.getState().scene.nextActions).toEqual([
       "Zur Brücke gehen.",
+    ]);
+  });
+
+  it("normalizes legacy and structured setup beats during replay", () => {
+    const legacyText =
+      "Im Diner Zur Grauen Wolldecke mustert Elinor Hale die Fremden.";
+    useGame.getState().ingest(
+      event({
+        id: "legacy_intro",
+        type: "session_bootstrap_v11",
+        payload: {
+          introSequence: {
+            establishingShot: "Regen liegt ueber Cypress Hollow.",
+            setupBeats: [legacyText],
+            characterIntros: [],
+            nextActions: [],
+          },
+        },
+      }),
+    );
+
+    expect(useGame.getState().scene.introSequence?.setupBeats).toEqual([
+      {
+        title: "Begegnung mit Elinor Hale",
+        text: legacyText,
+      },
+    ]);
+
+    useGame.getState().ingest(
+      event({
+        id: "structured_intro",
+        type: "session_bootstrap_v12",
+        payload: {
+          introSequence: {
+            establishingShot: "Die Kamera zieht enger.",
+            setupBeats: [
+              {
+                title: "Blicke im Diner",
+                text: "Elinor Hale mustert die Fremden.",
+              },
+            ],
+            characterIntros: [],
+            nextActions: [],
+          },
+        },
+      }),
+    );
+
+    expect(useGame.getState().scene.introSequence?.setupBeats).toEqual([
+      {
+        title: "Blicke im Diner",
+        text: "Elinor Hale mustert die Fremden.",
+      },
     ]);
   });
 

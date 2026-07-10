@@ -151,7 +151,15 @@ export const worldbuildOutputSchema = {
             establishingShot: { type: "string" },
             setupBeats: {
               type: "array",
-              items: { type: "string" },
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  title: { type: "string" },
+                  text: { type: "string" },
+                },
+                required: ["title", "text"],
+              },
             },
             characterHookStyle: { type: "string" },
             objective: { type: "string" },

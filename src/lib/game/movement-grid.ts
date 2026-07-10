@@ -5,20 +5,9 @@ import {
   normalizeMovementGrid,
   type MovementGrid,
 } from "./movement";
+import { BOOTSTRAP_EVENT_TYPES } from "./events";
 
-const SCENE_GRID_EVENTS = [
-  "scene_set",
-  "session_bootstrap_v11",
-  "session_bootstrap_v10",
-  "session_bootstrap_v9",
-  "session_bootstrap_v8",
-  "session_bootstrap_v7",
-  "session_bootstrap_v6",
-  "session_bootstrap_v5",
-  "session_bootstrap_v4",
-  "session_bootstrap_v3",
-  "session_bootstrap_v2",
-];
+const SCENE_GRID_EVENTS = ["scene_set", ...BOOTSTRAP_EVENT_TYPES];
 
 export async function movementGridForSession(input: {
   sessionId: string;
