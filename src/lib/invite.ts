@@ -10,6 +10,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { buildToken, parseToken } from "./invite-token";
 
@@ -33,23 +34,30 @@ export async function verifyToken(token: string) {
 }
 
 /** Generate a fresh invite for a campaign. */
-export async function createInvite(opts: {
-  campaignId: string;
-  issuedById: string;
-  displayName?: string;
-  ttlHours?: number;
-}) {
+export async function createInvite(
+  opts: {
+    campaignId: string;
+    issuedById: string;
+    displayName?: string;
+    ttlHours?: number;
+    sessionId?: string;
+    characterId?: string;
+  },
+  db?: Prisma.TransactionClient,
+) {
   const ttlHours = Math.min(Math.max(opts.ttlHours ?? 168, 1), 24 * 30);
   const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
   // Pre-generate a CUID-ish id so we can embed it in the token.
   const id = `inv_${randomBytes(12).toString("hex")}`;
   const code = buildToken(id, expiresAt);
 
-  const invite = await prisma.invite.create({
+  const invite = await (db ?? prisma).invite.create({
     data: {
       id,
       campaignId: opts.campaignId,
       issuedById: opts.issuedById,
+      sessionId: opts.sessionId,
+      characterId: opts.characterId,
       displayName: opts.displayName?.trim() || undefined,
       expiresAt,
       code,

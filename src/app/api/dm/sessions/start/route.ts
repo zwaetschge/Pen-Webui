@@ -13,9 +13,23 @@ export async function POST(req: Request) {
 
     const campaign = await prisma.campaign.findFirst({
       where: { id: campaignId, hostId: user.id },
+      select: {
+        id: true,
+        _count: { select: { characters: true } },
+      },
     });
     if (!campaign)
       return NextResponse.json({ error: "not_found" }, { status: 404 });
+
+    if (campaign._count.characters === 0) {
+      return NextResponse.json(
+        {
+          error: "character_required",
+          characterUrl: `/campaigns/${campaignId}/characters/new`,
+        },
+        { status: 409 },
+      );
+    }
 
     // close any other active session for this campaign
     await prisma.gameSession.updateMany({

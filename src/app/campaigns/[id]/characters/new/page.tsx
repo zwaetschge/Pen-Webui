@@ -1,7 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
-import { CharacterCreateForm } from "./_components/CharacterCreateForm";
+import {
+  CharacterCreateForm,
+  type CharacterTemplate,
+} from "./_components/CharacterCreateForm";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +20,16 @@ export default async function NewCharacterPage({ params }: Props) {
       id,
       OR: [{ hostId: user.id }, { characters: { some: { ownerId: user.id } } }],
     },
-    select: { id: true, title: true, theme: true, hostId: true },
+    select: {
+      id: true,
+      title: true,
+      theme: true,
+      hostId: true,
+      npcs: {
+        orderBy: { createdAt: "asc" },
+        include: { portraitAsset: true },
+      },
+    },
   });
   if (!campaign) notFound();
 
@@ -45,7 +57,19 @@ export default async function NewCharacterPage({ params }: Props) {
       </p>
       <div className="brass-divider my-6" />
 
-      <CharacterCreateForm campaignId={campaign.id} localMode={isHost} />
+      <CharacterCreateForm
+        campaignId={campaign.id}
+        localMode={isHost}
+        templates={campaign.npcs.map(
+          (npc): CharacterTemplate => ({
+            id: npc.id,
+            name: npc.name,
+            role: npc.role,
+            description: npc.description,
+            portraitUrl: npc.portraitAsset?.url ?? null,
+          }),
+        )}
+      />
     </main>
   );
 }

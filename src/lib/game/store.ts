@@ -214,6 +214,7 @@ type GameState = {
   } | null;
   assetsReady: AssetReady[];
   dmThinking: boolean;
+  highestDmTurnFence: number;
   connected: boolean;
   error: string | null;
   seenEventIds: Record<string, true>;
@@ -252,6 +253,7 @@ const initial: GameState = {
   awaitingSkillCheck: null,
   assetsReady: [],
   dmThinking: false,
+  highestDmTurnFence: 0,
   connected: false,
   error: null,
   seenEventIds: {},
@@ -269,6 +271,7 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
       sessionEnded: false,
       tokens: {},
       assetsReady: [],
+      highestDmTurnFence: 0,
       seenEventIds: {},
       seenEventOrder: [],
     }),
@@ -278,6 +281,13 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
     set({ role, displayName, sessionId }),
   appendLine: (line) => set((s) => trimChat(s.chat.concat(line))),
   ingest: (ev) => {
+    const dmTurnFence = numericDmTurnFence(ev.payload._dmTurnFence);
+    if (dmTurnFence !== null) {
+      const highestDmTurnFence = get().highestDmTurnFence;
+      if (dmTurnFence < highestDmTurnFence) return;
+      if (dmTurnFence > highestDmTurnFence) set({ highestDmTurnFence: dmTurnFence });
+    }
+
     if (ev.id) {
       if (get().seenEventIds[ev.id]) return;
       set((s) => rememberEvent(s, ev.id));
@@ -1098,6 +1108,13 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
     }
   },
 }));
+
+function numericDmTurnFence(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
 
 function rememberEvent(state: GameState, id: string) {
   const nextOrder = state.seenEventOrder.concat(id).slice(-1000);

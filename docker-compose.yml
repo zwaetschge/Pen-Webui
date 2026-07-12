@@ -173,7 +173,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BROWSER_REDIRECT_URL: https://${MINIO_CONSOLE_DOMAIN}
     volumes:
-      - minio_data:/data
+      - ${MINIO_DATA_PATH:-minio_data}:/data
     networks:
       - internal
       - traefik_proxy

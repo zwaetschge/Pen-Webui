@@ -93,11 +93,13 @@ export function eventForClient(
   }
 
   if (ev.type === "dm_error" && role !== "host") {
+    const fence = publicDmTurnFence(ev.payload._dmTurnFence);
     return {
       ...ev,
       payload: {
         message:
           "Der DM hatte ein internes Problem. Bitte sag der Spielleitung Bescheid.",
+        ...(fence === null ? {} : { _dmTurnFence: fence }),
       },
     };
   }
@@ -116,6 +118,14 @@ export function eventForClient(
   }
 
   return ev;
+}
+
+function publicDmTurnFence(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : null;
 }
 
 function publicCharacters(value: unknown) {

@@ -20,6 +20,8 @@ import {
   parseGuestCredential,
 } from "../guest-credential";
 import { verifyToken } from "../invite";
+import { parseToken } from "../invite-token";
+import { lockPairingSeat } from "./pairing-lock";
 
 export type SessionAccess =
   | {
@@ -53,6 +55,14 @@ export async function resolveAccess(opts: {
   });
   if (!session) return null;
 
+  if (opts.inviteToken) {
+    const parsed = parseToken(opts.inviteToken);
+    if (parsed && parsed.expiryUnix >= Math.floor(Date.now() / 1000)) {
+      const guest = await resolveGuestCredential(session, parsed.inviteId);
+      if (guest) return guest;
+    }
+  }
+
   const user = await getSessionUser();
   if (user) {
     // host
@@ -63,6 +73,7 @@ export async function resolveAccess(opts: {
         displayName: user.name ?? user.username,
         characterId: null,
       });
+      if (!member) return null;
       return {
         role: "host",
         sessionId: session.id,
@@ -86,6 +97,7 @@ export async function resolveAccess(opts: {
         displayName: user.name ?? user.username,
         characterId: character.id,
       });
+      if (!member) return null;
       return {
         role: "player",
         sessionId: session.id,
@@ -99,8 +111,10 @@ export async function resolveAccess(opts: {
     }
   }
 
-  const guest = await resolveGuestCredential(session);
-  if (guest) return guest;
+  if (!opts.inviteToken) {
+    const guest = await resolveGuestCredential(session);
+    if (guest) return guest;
+  }
 
   return null;
 }
@@ -117,27 +131,52 @@ export async function claimInviteForSession(
 
   const invite = await verifyToken(inviteToken);
   if (!invite || invite.campaignId !== session.campaignId) return null;
+  if (invite.sessionId && invite.sessionId !== session.id) return null;
 
   const now = new Date();
-  const consumed = await prisma.invite.updateMany({
-    where: {
-      id: invite.id,
-      campaignId: session.campaignId,
-      usedAt: null,
-      revokedAt: null,
-      expiresAt: { gt: now },
-    },
-    data: { usedAt: now },
-  });
-  if (consumed.count !== 1) return null;
+  let member: SessionMember | null;
+  try {
+    member = await prisma.$transaction(async (tx) => {
+      if (invite.characterId) {
+        await lockPairingSeat(tx, session.id, invite.characterId);
+        const occupied = await tx.sessionMember.findFirst({
+          where: {
+            sessionId: session.id,
+            characterId: invite.characterId,
+            leftAt: null,
+          },
+          select: { id: true },
+        });
+        if (occupied) return null;
+      }
 
-  const member = await ensureMember({
-    session,
-    userId: null,
-    inviteId: invite.id,
-    displayName: invite.displayName ?? "Guest",
-    characterId: null,
-  });
+      const consumed = await tx.invite.updateMany({
+        where: {
+          id: invite.id,
+          campaignId: session.campaignId,
+          usedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) return null;
+
+      return tx.sessionMember.create({
+        data: {
+          sessionId: session.id,
+          userId: null,
+          inviteId: invite.id,
+          displayName: invite.displayName ?? "Guest",
+          characterId: invite.characterId,
+        },
+      });
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) return null;
+    throw error;
+  }
+  if (!member) return null;
 
   return {
     credential: buildGuestCredential({
@@ -153,14 +192,25 @@ export async function claimInviteForSession(
   };
 }
 
+function isUniqueConstraintError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
+}
+
 async function resolveGuestCredential(
   session: GameSession & { campaign: { id: string; hostId: string } },
+  expectedInviteId?: string,
 ): Promise<Exclude<SessionAccess, { role: "host" }> | null> {
   const cookieStore = await cookies();
   const raw = cookieStore.get(guestCookieName(session.id))?.value;
   if (!raw) return null;
   const credential = parseGuestCredential(raw);
   if (!credential || credential.sessionId !== session.id) return null;
+  if (expectedInviteId && credential.inviteId !== expectedInviteId) return null;
 
   const member = await prisma.sessionMember.findFirst({
     where: {
@@ -183,6 +233,8 @@ async function resolveGuestCredential(
     select: {
       id: true,
       campaignId: true,
+      sessionId: true,
+      characterId: true,
       revokedAt: true,
       expiresAt: true,
     },
@@ -190,6 +242,9 @@ async function resolveGuestCredential(
   if (
     !invite ||
     invite.campaignId !== session.campaignId ||
+    (invite.sessionId !== null && invite.sessionId !== session.id) ||
+    (invite.characterId !== null &&
+      invite.characterId !== member.characterId) ||
     invite.revokedAt ||
     invite.expiresAt.getTime() < Date.now()
   ) {
@@ -214,35 +269,59 @@ async function ensureMember(opts: {
   inviteId?: string | null;
   displayName: string;
   characterId: string | null;
-}): Promise<SessionMember> {
+}): Promise<SessionMember | null> {
   const existing = await prisma.sessionMember.findFirst({
     where: {
       sessionId: opts.session.id,
       ...(opts.userId ? { userId: opts.userId } : { inviteId: opts.inviteId }),
     },
   });
+  if (
+    opts.characterId &&
+    (!existing ||
+      existing.leftAt ||
+      existing.characterId !== opts.characterId)
+  ) {
+    const occupied = await prisma.sessionMember.findFirst({
+      where: {
+        sessionId: opts.session.id,
+        characterId: opts.characterId,
+        leftAt: null,
+        ...(existing ? { id: { not: existing.id } } : {}),
+      },
+      select: { id: true },
+    });
+    if (occupied) return null;
+  }
   if (existing) {
     if (
       existing.characterId !== opts.characterId ||
-      existing.displayName !== opts.displayName
+      existing.displayName !== opts.displayName ||
+      existing.leftAt
     ) {
       return prisma.sessionMember.update({
         where: { id: existing.id },
         data: {
           characterId: opts.characterId,
           displayName: opts.displayName,
+          leftAt: null,
         },
       });
     }
     return existing;
   }
-  return prisma.sessionMember.create({
-    data: {
-      sessionId: opts.session.id,
-      userId: opts.userId,
-      inviteId: opts.inviteId,
-      displayName: opts.displayName,
-      characterId: opts.characterId,
-    },
-  });
+  try {
+    return await prisma.sessionMember.create({
+      data: {
+        sessionId: opts.session.id,
+        userId: opts.userId,
+        inviteId: opts.inviteId,
+        displayName: opts.displayName,
+        characterId: opts.characterId,
+      },
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) return null;
+    throw error;
+  }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ttsPostPath } from "./tts-paths";
+import { isTtsExperienceEnabled } from "./TtsProvider";
 
 describe("ttsPostPath", () => {
   it("uses the authenticated session endpoint", () => {
@@ -10,5 +11,12 @@ describe("ttsPostPath", () => {
     expect(ttsPostPath("sess_1", "tok/with spaces")).toBe(
       "/api/invite/sessions/sess_1/tts/tok%2Fwith%20spaces",
     );
+  });
+});
+
+describe("table audio ownership", () => {
+  it("enables TTS only for the shared table experience", () => {
+    expect(isTtsExperienceEnabled("table")).toBe(true);
+    expect(isTtsExperienceEnabled("companion")).toBe(false);
   });
 });

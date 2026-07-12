@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   actionChoiceButtonClassName,
   actionChoiceGridClassName,
+  actionErrorLabel,
   COMBAT_ACTION_BUTTONS,
   combatActionGridClassName,
   selectActionCards,
@@ -78,5 +79,13 @@ describe("combat action layout", () => {
     expect(className).toContain("sm:grid-cols-4");
     expect(className).toContain("xl:grid-cols-7");
     expect(className).not.toContain("grid-cols-5");
+  });
+});
+
+describe("action errors", () => {
+  it("explains a busy Codex turn without exposing an internal error code", () => {
+    expect(actionErrorLabel("dm_busy", 409)).toBe(
+      "Der DM verarbeitet gerade eine andere Aktion. Gleich erneut versuchen.",
+    );
   });
 });

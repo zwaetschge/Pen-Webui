@@ -5,26 +5,34 @@ import { guestCookieName } from "@/lib/guest-credential";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  req: Request,
+export function GET(
+  _req: Request,
+  _context: { params: Promise<{ id: string; token: string }> },
+) {
+  return NextResponse.json(
+    { error: "method_not_allowed" },
+    { status: 405, headers: { allow: "POST" } },
+  );
+}
+
+export async function POST(
+  _req: Request,
   { params }: { params: Promise<{ id: string; token: string }> },
 ) {
   const { id, token } = await params;
   const claim = await claimInviteForSession(id, token);
-  const base = new URL(req.url);
 
   if (!claim) {
-    return NextResponse.redirect(
-      new URL(`/play/invite/${encodeURIComponent(token)}`, base),
+    return NextResponse.json(
+      { error: "invite_unavailable" },
+      { status: 409 },
     );
   }
 
-  const response = NextResponse.redirect(
-    new URL(
-      `/play/invite/${encodeURIComponent(token)}/sessions/${encodeURIComponent(id)}`,
-      base,
-    ),
-  );
+  const redirectTo = `/play/invite/${encodeURIComponent(
+    token,
+  )}/sessions/${encodeURIComponent(id)}`;
+  const response = NextResponse.json({ redirectTo });
   response.cookies.set(guestCookieName(id), claim.credential, {
     httpOnly: true,
     sameSite: "lax",

@@ -6,8 +6,15 @@ import { cn } from "@/lib/cn";
 export function ConnectionBadge() {
   const connected = useGame((s) => s.connected);
   const error = useGame((s) => s.error);
+  const label = connected
+    ? "Online"
+    : error
+      ? "Verbindung wird wiederhergestellt"
+      : "Verbindet";
   return (
     <span
+      role="status"
+      aria-live="polite"
       className={cn(
         "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider",
         connected
@@ -22,7 +29,7 @@ export function ConnectionBadge() {
           connected ? "bg-brass-300" : "animate-pulse bg-blood-500",
         )}
       />
-      {connected ? "online" : "offline"}
+      {label}
     </span>
   );
 }

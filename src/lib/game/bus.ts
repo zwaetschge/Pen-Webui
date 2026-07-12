@@ -23,10 +23,14 @@ export type GameEvent = {
 };
 
 let pub: Redis | null = null;
+const REDIS_PUBLISH_TIMEOUT_MS = 5_000;
 export function pubClient(): Redis {
   if (!pub) {
     pub = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
-      maxRetriesPerRequest: null,
+      commandTimeout: REDIS_PUBLISH_TIMEOUT_MS,
+      connectTimeout: REDIS_PUBLISH_TIMEOUT_MS,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
     });
   }
   return pub;
@@ -65,8 +69,26 @@ export async function publishEvent(
     ts: row.ts.getTime(),
     scope: opts.scope ?? "all",
   };
-  await pubClient().publish(channel(sessionId), JSON.stringify(ev));
+  await boundedPublish(pubClient(), channel(sessionId), JSON.stringify(ev));
   return ev;
+}
+
+async function boundedPublish(client: Redis, topic: string, message: string) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      client.publish(topic, message),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Redis publish timed out")),
+          REDIS_PUBLISH_TIMEOUT_MS,
+        );
+        if (typeof timer === "object" && "unref" in timer) timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 const DEFAULT_REPLAY_LIMIT = 200;

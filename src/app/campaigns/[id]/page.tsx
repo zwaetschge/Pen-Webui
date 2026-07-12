@@ -42,6 +42,7 @@ export default async function CampaignDetail({ params }: Props) {
     ? campaign.characters
     : campaign.characters.filter((character) => character.ownerId === user.id);
   const visibleItems = isHost ? campaign.items : [];
+  const hasPlayableCharacters = campaign.characters.length > 0;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -239,39 +240,48 @@ export default async function CampaignDetail({ params }: Props) {
         <aside className="space-y-6">
           <div className="panel p-5">
             <h3 className="font-display text-sm uppercase tracking-[0.3em] text-brass-400">
-              Play
+              Gemeinsam spielen
             </h3>
+            <p className="mt-2 text-sm text-ink-100">
+              {campaign.characters.length} {campaign.characters.length === 1 ? "Figur" : "Figuren"} bereit
+            </p>
             {isHost ? (
               <div className="mt-3 flex flex-col gap-2">
                 <Link
                   href={
-                    activeSession
-                      ? `/table/sessions/${activeSession.id}`
-                      : `/dm/sessions/start?campaign=${campaign.id}`
+                    !hasPlayableCharacters
+                      ? `/campaigns/${campaign.id}/characters/new`
+                      : activeSession
+                        ? `/table/sessions/${activeSession.id}`
+                        : `/dm/sessions/start?campaign=${campaign.id}`
                   }
                   className="rounded-md border border-arcane-500/60 bg-arcane-600/30 px-4 py-2 text-center text-sm text-parchment-100 transition hover:bg-arcane-500/40"
                 >
-                  {activeSession ? "Resume table" : "Start session"}
+                  {!hasPlayableCharacters
+                    ? "Erste Figur anlegen"
+                    : activeSession
+                      ? "Gemeinschaftstisch öffnen"
+                      : "Session starten"}
                 </Link>
-                {activeSession ? (
+                {activeSession && hasPlayableCharacters ? (
                   <Link
                     href={`/dm/sessions/start?campaign=${campaign.id}`}
                     className="rounded-md border border-brass-700/40 bg-ink-600/60 px-4 py-2 text-center text-sm text-brass-300 transition hover:border-brass-400/60"
                   >
-                    Open new session
+                    Neue Session öffnen
                   </Link>
                 ) : null}
                 <Link
                   href={`/campaigns/${campaign.id}/invites`}
                   className="rounded-md border border-brass-400/60 bg-brass-700/30 px-4 py-2 text-center text-sm text-parchment-100 transition hover:bg-brass-600/40"
                 >
-                  Invite players
+                  Klassische Einladung
                 </Link>
                 <Link
                   href={`/campaigns/${campaign.id}/characters/new`}
                   className="rounded-md border border-brass-700/40 bg-ink-600/60 px-4 py-2 text-center text-sm text-brass-300 transition hover:border-brass-400/60"
                 >
-                  Create local character
+                  Weitere Figur anlegen
                 </Link>
                 <Link
                   href={`/campaigns/${campaign.id}/assets`}

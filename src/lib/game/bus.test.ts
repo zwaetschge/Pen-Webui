@@ -2,13 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIENT_EVENT_TYPES } from "./events";
 
 const db = vi.hoisted(() => ({
+  create: vi.fn(),
   findFirst: vi.fn(),
   findMany: vi.fn(),
 }));
+const redisClient = vi.hoisted(() => ({ publish: vi.fn() }));
+const redisConstructor = vi.hoisted(() => vi.fn(() => redisClient));
+
+vi.mock("ioredis", () => ({ default: redisConstructor }));
 
 vi.mock("../db", () => ({
   prisma: {
     eventLog: {
+      create: db.create,
       findFirst: db.findFirst,
       findMany: db.findMany,
     },
@@ -19,6 +25,8 @@ describe("recentEvents", () => {
   beforeEach(() => {
     db.findFirst.mockReset();
     db.findMany.mockReset();
+    db.create.mockReset();
+    redisClient.publish.mockReset();
   });
 
   it("loads only client-visible event types and returns tail events chronologically", async () => {
@@ -109,5 +117,44 @@ describe("recentEvents", () => {
         take: 500,
       }),
     );
+  });
+
+  it("configures the publisher to fail fast without an offline queue", async () => {
+    const { pubClient } = await import("./bus");
+
+    pubClient();
+
+    expect(redisConstructor).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        enableOfflineQueue: false,
+        maxRetriesPerRequest: 1,
+        commandTimeout: 5_000,
+      }),
+    );
+  });
+
+  it("bounds a publish command after persisting the canonical event", async () => {
+    vi.useFakeTimers();
+    db.create.mockResolvedValue({
+      id: "ev_hung",
+      ts: new Date("2026-06-02T10:00:00.000Z"),
+    });
+    redisClient.publish.mockReturnValue(new Promise(() => undefined));
+    const { publishEvent } = await import("./bus");
+
+    try {
+      const publishing = publishEvent("sess_1", "narrate", { text: "saved" });
+      const rejection = expect(publishing).rejects.toThrow(
+        "Redis publish timed out",
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await rejection;
+      expect(db.create).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

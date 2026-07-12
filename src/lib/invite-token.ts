@@ -48,7 +48,8 @@ export function parseToken(
   const expectedSig = sign(`${inviteId}.${expiryStr}`);
   const a = fromB64url(sigB64);
   const b = fromB64url(expectedSig);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  if (a.length !== b.length || !timingSafeEqual(a, b) || sigB64 !== expectedSig)
+    return null;
   const expiryUnix = Number(expiryStr);
   if (!Number.isFinite(expiryUnix)) return null;
   return { inviteId, expiryUnix };

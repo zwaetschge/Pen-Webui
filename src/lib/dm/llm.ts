@@ -256,7 +256,6 @@ async function completeCodexJsonObject(
   const settings = await codexDmSettings(opts.userId);
   const raw = await runCodexExec({
     prompt,
-    outputSchema: opts.outputSchema,
     settings,
   });
   return { value: parseModelJson(raw) };
@@ -449,10 +448,56 @@ function parseModelJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("model returned non-JSON output");
-    return JSON.parse(match[0]);
+    const extracted = extractFirstJsonValue(text);
+    if (!extracted) throw new Error("model returned non-JSON output");
+    return JSON.parse(extracted);
   }
+}
+
+function extractFirstJsonValue(text: string) {
+  for (let start = 0; start < text.length; start += 1) {
+    const opener = text[start];
+    if (opener !== "{" && opener !== "[") continue;
+
+    const stack: string[] = [opener === "{" ? "}" : "]"];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start + 1; index < text.length; index += 1) {
+      const char = text[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (char === "{" || char === "[") {
+        stack.push(char === "{" ? "}" : "]");
+        continue;
+      }
+
+      if (char === "}" || char === "]") {
+        if (stack.at(-1) !== char) break;
+        stack.pop();
+        if (stack.length === 0) {
+          return text.slice(start, index + 1);
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function compactProcessOutput(result: { stdout: string; stderr: string }) {

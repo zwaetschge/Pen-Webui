@@ -15,6 +15,12 @@ import {
   type GameEvent,
 } from "./bus";
 import { eventForClient } from "./events";
+import {
+  acquireDmTurnLock,
+  confirmDmTurnLockOwned,
+  releaseDmTurnLock,
+  type DmTurnLock,
+} from "./turn-lock";
 
 const turnBodySchema = z.object({
   text: z.string().min(1).max(2000),
@@ -28,6 +34,7 @@ const rollBodySchema = z.object({
 });
 
 const LIVE_REPLAY_BUFFER_LIMIT = 1000;
+const DM_FINALIZATION_TIMEOUT_MS = 5_000;
 
 function inviteTokenFrom(req: Request, override?: string | null) {
   if (override !== undefined) return override;
@@ -239,23 +246,36 @@ export async function handleSessionTurn(
     return NextResponse.json(turnBlock, { status: 409 });
   }
 
+  const dmTurnLock = await acquireDmTurnLock(sessionId);
+  if (!dmTurnLock) {
+    return NextResponse.json({ error: "dm_busy" }, { status: 409 });
+  }
+
   const runnerId = session.campaign.hostId;
 
-  await publishEvent(
-    sessionId,
-    "player_input",
-    {
-      kind: "player_input",
-      text: body.data.text,
-      actorId: actor.eventActorId,
-      displayName: actor.displayName,
-      characterId: actor.characterId,
-      actorKind: actor.actorKind,
-    },
-    { actorId: actor.dbActorId },
-  );
+  try {
+    await publishEvent(
+      sessionId,
+      "player_input",
+      {
+        kind: "player_input",
+        text: body.data.text,
+        actorId: actor.eventActorId,
+        displayName: actor.displayName,
+        characterId: actor.characterId,
+        actorKind: actor.actorKind,
+      },
+      { actorId: actor.dbActorId },
+    );
 
-  await publishEvent(sessionId, "dm_thinking", { active: true });
+    await publishDmEvent(sessionId, dmTurnLock, "dm_thinking", {
+      active: true,
+    });
+    await confirmDmTurnLockOwned(dmTurnLock);
+  } catch (error) {
+    await releaseDmTurnLock(dmTurnLock);
+    throw error;
+  }
 
   void runDmTurn({
     sessionId,
@@ -270,16 +290,14 @@ export async function handleSessionTurn(
       alreadyPersisted: true,
     },
     emit: async (ev) => {
-      await publishEvent(sessionId, ev.type, ev.payload);
+      await publishDmEvent(sessionId, dmTurnLock, ev.type, ev.payload);
     },
   })
     .catch(async (e) => {
-      await publishEvent(sessionId, "dm_error", {
-        message: e instanceof Error ? e.message : "unknown",
-      });
+      await publishDmErrorWhileOwned(sessionId, dmTurnLock, e);
     })
     .finally(async () => {
-      await publishEvent(sessionId, "dm_thinking", { active: false });
+      await finalizeDmTurn(sessionId, dmTurnLock);
     });
 
   return NextResponse.json({ ok: true });
@@ -320,35 +338,55 @@ export async function handleSessionRoll(
     return NextResponse.json({ error: "invalid_character" }, { status: 403 });
   }
 
+  const dmTurnLock: DmTurnLock | null =
+    actor.actorKind === "player" ? await acquireDmTurnLock(sessionId) : null;
+  if (actor.actorKind === "player" && !dmTurnLock) {
+    return NextResponse.json({ error: "dm_busy" }, { status: 409 });
+  }
+
   let result;
   try {
     result = rollDice(body.data.notation);
   } catch (e) {
+    if (dmTurnLock) await releaseDmTurnLock(dmTurnLock);
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "bad_notation" },
       { status: 400 },
     );
   }
 
-  await publishEvent(
-    sessionId,
-    "dice_roll",
-    {
-      notation: body.data.notation,
-      total: result.total,
-      breakdown: result.breakdown,
-      rolls: result.rolls,
-      reason: body.data.reason,
-      actorId: actor.eventActorId,
-      actor: actor.actorKind,
-      displayName: actor.displayName,
-      characterId: actor.characterId,
-    },
-    { actorId: actor.dbActorId },
-  );
+  try {
+    await publishEvent(
+      sessionId,
+      "dice_roll",
+      {
+        notation: body.data.notation,
+        total: result.total,
+        breakdown: result.breakdown,
+        rolls: result.rolls,
+        reason: body.data.reason,
+        actorId: actor.eventActorId,
+        actor: actor.actorKind,
+        displayName: actor.displayName,
+        characterId: actor.characterId,
+      },
+      { actorId: actor.dbActorId },
+    );
+  } catch (error) {
+    if (dmTurnLock) await releaseDmTurnLock(dmTurnLock);
+    throw error;
+  }
 
   if (actor.actorKind === "player") {
-    await publishEvent(sessionId, "dm_thinking", { active: true });
+    try {
+      await publishDmEvent(sessionId, dmTurnLock!, "dm_thinking", {
+        active: true,
+      });
+      await confirmDmTurnLockOwned(dmTurnLock!);
+    } catch (error) {
+      if (dmTurnLock) await releaseDmTurnLock(dmTurnLock);
+      throw error;
+    }
     void runDmTurn({
       sessionId,
       campaignId: session.campaignId,
@@ -368,22 +406,86 @@ export async function handleSessionRoll(
         alreadyPersisted: true,
       },
       emit: async (ev) => {
-        await publishEvent(sessionId, ev.type, ev.payload);
+        await publishDmEvent(sessionId, dmTurnLock!, ev.type, ev.payload);
       },
     })
       .catch(async (e) => {
-        await publishEvent(sessionId, "dm_error", {
-          message: e instanceof Error ? e.message : "unknown",
-        });
+        await publishDmErrorWhileOwned(sessionId, dmTurnLock!, e);
       })
       .finally(async () => {
-        await publishEvent(sessionId, "dm_thinking", { active: false });
+        if (dmTurnLock) await finalizeDmTurn(sessionId, dmTurnLock);
       });
   }
 
   return NextResponse.json({
     total: result.total,
     breakdown: result.breakdown,
+  });
+}
+
+async function publishDmErrorWhileOwned(
+  sessionId: string,
+  lock: DmTurnLock,
+  error: unknown,
+) {
+  try {
+    await publishDmEvent(sessionId, lock, "dm_error", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  } catch {
+    // A stale runner must not emit an error into its successor's event stream.
+  }
+}
+
+async function publishDmEvent(
+  sessionId: string,
+  lock: DmTurnLock,
+  type: string,
+  payload: Record<string, unknown>,
+) {
+  await confirmDmTurnLockOwned(lock);
+  await publishEvent(sessionId, type, {
+    ...payload,
+    _dmTurnFence: lock.fence,
+  });
+}
+
+async function finalizeDmTurn(sessionId: string, lock: DmTurnLock) {
+  try {
+    await withTimeout(
+      publishDmEvent(sessionId, lock, "dm_thinking", { active: false }),
+      DM_FINALIZATION_TIMEOUT_MS,
+    );
+  } catch {
+    // Lease loss or a stuck event bus must not retain the admission lock.
+  } finally {
+    await releaseDmTurnLock(lock);
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("DM finalization timed out"));
+    }, timeoutMs);
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
   });
 }
 

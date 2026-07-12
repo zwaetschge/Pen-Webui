@@ -135,6 +135,14 @@ export async function draftBlueprint(
   const loreBlock = opts?.loreBible
     ? `\nLORE BIBLE:\n${JSON.stringify(opts.loreBible, null, 2)}\n`
     : "";
+  const sourceAdaptationBlock = hasLoreBibleConstraints(opts?.loreBible)
+    ? `\nSOURCE ADAPTATION MODE:
+- Treat the LORE BIBLE and uploaded source titles as the existing campaign setting and story canon.
+- Convert that source into a playable D&D 5e tabletop adventure; D&D rules govern mechanics, checks, monsters, encounter balance, and character options.
+- Do not invent a substitute setting, renamed cast, unrelated factions, or unrelated plot.
+- Preserve named characters, places, factions, relationships, tone, timeline, and central mystery unless the LORE BIBLE explicitly marks uncertainty.
+- If D&D mechanics require changes, adapt mechanics around the source canon rather than changing the source canon.\n`
+    : "";
 
   const userMsg = `Design a campaign for the following brief.
 
@@ -146,6 +154,7 @@ TARGET SESSION LENGTH: ${input.sessionLengthHours}h
 HOUSE RULES: ${input.houseRules ?? "(none)"}
 SEED IDEAS: ${input.seedIdeas ?? "(none)"}
 ${loreBlock}
+${sourceAdaptationBlock}
 
 Output the JSON blueprint per the schema. No markdown.`;
 
@@ -159,6 +168,18 @@ Output the JSON blueprint per the schema. No markdown.`;
   });
 
   return blueprintSchema.parse(parsed);
+}
+
+function hasLoreBibleConstraints(loreBible: LoreBible | undefined) {
+  if (!loreBible) return false;
+  return (
+    loreBible.sourceTitles.length > 0 ||
+    loreBible.canonFacts.length > 0 ||
+    loreBible.characters.length > 0 ||
+    loreBible.locations.length > 0 ||
+    loreBible.adaptationRules.length > 0 ||
+    loreBible.forbiddenContradictions.length > 0
+  );
 }
 
 /** Persist a Blueprint into Campaign + related rows + queue asset jobs. */

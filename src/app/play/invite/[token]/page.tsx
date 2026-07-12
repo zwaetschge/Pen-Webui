@@ -1,6 +1,7 @@
 import { PlayInviteJoin } from "../../_components/PlayInviteJoin";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 type Props = {
   params: Promise<{ token: string }>;

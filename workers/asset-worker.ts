@@ -132,6 +132,7 @@ async function processJob(job: Job<AssetJob>) {
       })
       .catch(() => undefined);
     logger.error({ assetId, err: msg }, "asset generation failed");
+    if (campaignId) await maybeMarkReady(campaignId).catch(() => {});
     throw e;
   }
 

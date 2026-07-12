@@ -8,5 +8,5 @@ type Props = {
 
 export default async function TableSessionPage({ params }: Props) {
   const { id } = await params;
-  return <PlaySessionRoom sessionId={id} />;
+  return <PlaySessionRoom sessionId={id} experience="table" />;
 }

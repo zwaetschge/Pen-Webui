@@ -176,7 +176,7 @@ export function ActionBar(props: Props) {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(
-          body.error ?? `Senden fehlgeschlagen (${response.status})`,
+          actionErrorLabel(body.error, response.status),
         );
       }
     } catch (e) {
@@ -209,7 +209,7 @@ export function ActionBar(props: Props) {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(
-          body.error ?? `Wurf fehlgeschlagen (${response.status})`,
+          actionErrorLabel(body.error, response.status),
         );
       }
     } catch (e) {
@@ -241,7 +241,7 @@ export function ActionBar(props: Props) {
   }
 
   return (
-    <div className="command-tray max-h-[46dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 bg-ink-500/84 px-3 py-3 shadow-2xl sm:px-4 lg:max-h-[36vh]">
+    <div className="command-tray max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 bg-ink-500/84 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:px-4 lg:max-h-[36vh]">
       {awaiting ? (
         <div className="table-note mb-3 border border-arcane-500/50 bg-arcane-600/15 px-3 py-2 text-sm">
           <p className="text-arcane-400">
@@ -265,13 +265,13 @@ export function ActionBar(props: Props) {
       ) : null}
 
       {dmThinking ? (
-        <div className="table-note mb-3 border border-brass-400/40 bg-brass-700/20 px-3 py-2 text-sm text-brass-300">
+        <div role="status" aria-live="polite" className="table-note mb-3 border border-brass-400/40 bg-brass-700/20 px-3 py-2 text-sm text-brass-300">
           Der DM wertet die Szene aus...
         </div>
       ) : null}
 
       {blockedByTurn ? (
-        <div className="table-note mb-3 border border-brass-700/40 bg-ink-600/55 px-3 py-2 text-sm text-ink-100">
+        <div role="status" className="table-note mb-3 border border-brass-700/40 bg-ink-600/55 px-3 py-2 text-sm text-ink-100">
           Am Zug: {activeTurnName ?? "andere Figur"}
         </div>
       ) : null}
@@ -295,6 +295,41 @@ export function ActionBar(props: Props) {
           </select>
         </label>
       ) : null}
+
+      <div className="turn-composer mb-3 grid gap-2 rounded-md border border-brass-700/45 bg-ink-700/45 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
+        <textarea
+          ref={textareaRef}
+          rows={2}
+          value={draft}
+          disabled={busyOrBlocked}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={
+            selectedCharacter
+              ? `Was tut ${selectedCharacter.name}?`
+              : props.role === "host"
+                ? "Tischhinweis an den KI-DM"
+                : "Beschreibe deine Aktion..."
+          }
+          className="speech-input min-h-16 w-full resize-none rounded-md border border-brass-700/50 bg-ink-600/75 px-4 py-3 text-base leading-relaxed text-parchment-100 placeholder:text-ink-200 focus:border-brass-400/70 focus:outline-none disabled:opacity-70"
+        />
+        <button
+          type="button"
+          disabled={busyOrBlocked || !draft.trim()}
+          onClick={send}
+          className={cn(
+            "min-h-12 rounded-md border px-5 py-2 text-sm font-medium sm:min-w-36",
+            !draft.trim() || busyOrBlocked
+              ? "cursor-not-allowed border-ink-200/30 bg-ink-600/40 text-ink-200"
+              : "border-brass-400/70 bg-brass-700/40 text-parchment-100 shadow-brass hover:bg-brass-600/45",
+          )}
+        >
+          {busy ? "Sendet" : dmThinking ? "DM denkt" : "Aktion senden"}
+        </button>
+      </div>
+      <p className="mb-3 text-xs text-ink-200">
+        Enter sendet. Shift+Enter schreibt weiter.
+      </p>
 
       {actionCards.length > 0 ? (
         <div className="choice-dock mb-3 rounded-md border border-brass-700/45 bg-ink-600/42 p-2 shadow-[0_16px_40px_rgba(0,0,0,0.28)]">
@@ -326,7 +361,7 @@ export function ActionBar(props: Props) {
       ) : null}
 
       <details className="dice-pocket mb-3 rounded-md border border-brass-700/35 bg-ink-600/35">
-        <summary className="cursor-pointer px-3 py-2 font-display text-[11px] uppercase tracking-[0.2em] text-brass-400">
+        <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 font-display text-[11px] uppercase tracking-[0.2em] text-brass-400">
           Würfel
         </summary>
         <div className="dice-rail flex flex-wrap gap-1.5 border-t border-brass-700/25 p-2">
@@ -336,7 +371,7 @@ export function ActionBar(props: Props) {
               type="button"
               disabled={busyOrBlocked}
               onClick={() => quickRoll(q.n)}
-              className="dice-button border border-brass-700/50 bg-ink-600/70 px-2.5 py-1.5 text-xs text-brass-300 hover:border-brass-400/70 disabled:opacity-50"
+              className="dice-button min-h-11 border border-brass-700/50 bg-ink-600/70 px-3 py-2 text-xs text-brass-300 hover:border-brass-400/70 disabled:opacity-50"
             >
               {q.label}
             </button>
@@ -344,41 +379,11 @@ export function ActionBar(props: Props) {
         </div>
       </details>
 
-      <div className="turn-composer grid gap-2 rounded-md border border-brass-700/45 bg-ink-700/45 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
-        <textarea
-          ref={textareaRef}
-          rows={2}
-          value={draft}
-          disabled={busyOrBlocked}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={
-            selectedCharacter
-              ? `Was tut ${selectedCharacter.name}?`
-              : props.role === "host"
-                ? "Tischhinweis an den KI-DM"
-                : "Beschreibe deine Aktion..."
-          }
-          className="speech-input min-h-16 w-full resize-none rounded-md border border-brass-700/50 bg-ink-600/75 px-4 py-3 text-base leading-relaxed text-parchment-100 placeholder:text-ink-200 focus:border-brass-400/70 focus:outline-none disabled:opacity-70"
-        />
-        <button
-          type="button"
-          disabled={busyOrBlocked || !draft.trim()}
-          onClick={send}
-          className={cn(
-            "min-h-12 rounded-md border px-5 py-2 text-sm font-medium sm:min-w-36",
-            !draft.trim() || busyOrBlocked
-              ? "cursor-not-allowed border-ink-200/30 bg-ink-600/40 text-ink-200"
-              : "border-brass-400/70 bg-brass-700/40 text-parchment-100 shadow-brass hover:bg-brass-600/45",
-          )}
-        >
-          {busy ? "Sendet" : dmThinking ? "DM denkt" : "Aktion senden"}
-        </button>
-      </div>
-      <p className="mt-1 text-xs text-ink-200">
-        Enter sendet. Shift+Enter schreibt weiter.
-      </p>
-      {error ? <p className="mt-1 text-xs text-blood-500">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="mt-1 text-xs text-blood-500">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -461,7 +466,7 @@ function CombatActionPanel(props: {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(labelError(body.error, response.status));
+        throw new Error(actionErrorLabel(body.error, response.status));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Aktion fehlgeschlagen");
@@ -476,7 +481,7 @@ function CombatActionPanel(props: {
   const lastAction = combat.lastAction;
 
   return (
-    <div className="command-tray bg-ink-600/92 shrink-0 border-t border-brass-700/45 px-4 py-3">
+    <div className="command-tray max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 bg-ink-600/92 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="font-display text-[10px] uppercase tracking-[0.26em] text-brass-400">
@@ -519,7 +524,7 @@ function CombatActionPanel(props: {
                 type="button"
                 onClick={() => props.onSelectedTokenChange?.(target.id)}
                 className={cn(
-                  "action-card min-w-[7.5rem] border px-2.5 py-1.5 text-left text-xs",
+                  "action-card min-h-11 min-w-[7.5rem] border px-2.5 py-2 text-left text-xs",
                   active
                     ? "border-brass-400/70 bg-brass-700/35 text-parchment-100"
                     : "border-brass-700/35 bg-ink-500/50 text-ink-100 hover:border-brass-400/60",
@@ -693,7 +698,10 @@ function movementAllowance(token: Token, combat: CombatState) {
   );
 }
 
-function labelError(error: unknown, status: number) {
+export function actionErrorLabel(error: unknown, status: number) {
+  if (error === "dm_busy") {
+    return "Der DM verarbeitet gerade eine andere Aktion. Gleich erneut versuchen.";
+  }
   if (error === "target_out_of_range") return "Ziel außer Reichweite";
   if (error === "action_spent") return "Aktion verbraucht";
   if (error === "bonus_action_spent") return "Bonus verbraucht";
@@ -701,6 +709,7 @@ function labelError(error: unknown, status: number) {
   if (error === "not_your_turn") return "Nicht am Zug";
   if (error === "target_required") return "Ziel fehlt";
   if (error === "target_not_found") return "Ziel nicht verfügbar";
+  if (typeof error === "string" && error.trim()) return error;
   return `Aktion fehlgeschlagen (${status})`;
 }
 
