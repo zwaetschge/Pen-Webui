@@ -6,7 +6,13 @@ const db = vi.hoisted(() => ({
   findFirst: vi.fn(),
   findMany: vi.fn(),
 }));
-const redisClient = vi.hoisted(() => ({ publish: vi.fn() }));
+const redisClient = vi.hoisted(() => ({
+  status: "wait",
+  connect: vi.fn(),
+  once: vi.fn(),
+  removeListener: vi.fn(),
+  publish: vi.fn(),
+}));
 const redisConstructor = vi.hoisted(() => vi.fn(() => redisClient));
 
 vi.mock("ioredis", () => ({ default: redisConstructor }));
@@ -26,6 +32,13 @@ describe("recentEvents", () => {
     db.findFirst.mockReset();
     db.findMany.mockReset();
     db.create.mockReset();
+    redisClient.status = "wait";
+    redisClient.connect.mockReset();
+    redisClient.connect.mockImplementation(async () => {
+      redisClient.status = "ready";
+    });
+    redisClient.once.mockReset();
+    redisClient.removeListener.mockReset();
     redisClient.publish.mockReset();
   });
 
@@ -128,9 +141,33 @@ describe("recentEvents", () => {
       expect.any(String),
       expect.objectContaining({
         enableOfflineQueue: false,
+        lazyConnect: true,
         maxRetriesPerRequest: 1,
         commandTimeout: 5_000,
       }),
+    );
+  });
+
+  it("connects the fail-fast publisher before its first command", async () => {
+    db.create.mockResolvedValue({
+      id: "ev_first",
+      ts: new Date("2026-06-02T10:00:00.000Z"),
+    });
+    redisClient.publish.mockImplementation(async () => {
+      if (redisClient.status !== "ready") {
+        throw new Error(
+          "Stream isn't writeable and enableOfflineQueue is false",
+        );
+      }
+      return 1;
+    });
+    const { publishEvent } = await import("./bus");
+
+    await publishEvent("sess_1", "narrate", { text: "first" });
+
+    expect(redisClient.connect).toHaveBeenCalledTimes(1);
+    expect(redisClient.connect.mock.invocationCallOrder[0]).toBeLessThan(
+      redisClient.publish.mock.invocationCallOrder[0],
     );
   });
 

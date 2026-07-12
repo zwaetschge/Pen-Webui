@@ -23,6 +23,7 @@ export type GameEvent = {
 };
 
 let pub: Redis | null = null;
+let pubConnection: Promise<void> | null = null;
 const REDIS_PUBLISH_TIMEOUT_MS = 5_000;
 export function pubClient(): Redis {
   if (!pub) {
@@ -30,6 +31,7 @@ export function pubClient(): Redis {
       commandTimeout: REDIS_PUBLISH_TIMEOUT_MS,
       connectTimeout: REDIS_PUBLISH_TIMEOUT_MS,
       enableOfflineQueue: false,
+      lazyConnect: true,
       maxRetriesPerRequest: 1,
     });
   }
@@ -74,13 +76,50 @@ export async function publishEvent(
 }
 
 async function boundedPublish(client: Redis, topic: string, message: string) {
+  await ensurePublisherReady(client);
+  await boundedRedisOperation(
+    client.publish(topic, message),
+    "Redis publish timed out",
+  );
+}
+
+async function ensurePublisherReady(client: Redis) {
+  if (isPublisherReady(client)) return;
+  if (!pubConnection) {
+    if (client.status !== "wait") {
+      throw new Error(`Redis publisher is not ready (${client.status})`);
+    }
+    pubConnection = boundedRedisOperation(
+      client.connect(),
+      "Redis publisher connection timed out",
+    );
+  }
+  const connection = pubConnection;
+  try {
+    await connection;
+  } finally {
+    if (pubConnection === connection) pubConnection = null;
+  }
+  if (!isPublisherReady(client)) {
+    throw new Error(`Redis publisher is not ready (${client.status})`);
+  }
+}
+
+function isPublisherReady(client: Redis) {
+  return client.status === "ready";
+}
+
+async function boundedRedisOperation<T>(
+  operation: Promise<T>,
+  message: string,
+) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    await Promise.race([
-      client.publish(topic, message),
+    return await Promise.race([
+      operation,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("Redis publish timed out")),
+          () => reject(new Error(message)),
           REDIS_PUBLISH_TIMEOUT_MS,
         );
         if (typeof timer === "object" && "unref" in timer) timer.unref();
