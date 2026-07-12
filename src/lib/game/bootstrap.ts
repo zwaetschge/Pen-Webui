@@ -253,17 +253,17 @@ export function buildIntroSequence(input: {
   characters: CharacterIntroInput[];
 }) {
   const establishingShot =
-    playerFacingGerman(input.introPlan.establishingShot) ??
+    playerFacingNarrative(input.introPlan.establishingShot) ??
     fallbackEstablishingShot(input.locationName, input.locationDescription);
   const setupBeats = buildSetupBeats(input);
   const characterIntros = input.characters.map((character) =>
     buildCharacterIntro(character),
   );
   const objective = normalizeSentence(
-    playerFacingGerman(input.introPlan.objective) ?? input.brief.objective,
+    playerFacingNarrative(input.introPlan.objective) ?? input.brief.objective,
   );
   const stakes = normalizeSentence(
-    playerFacingGerman(input.introPlan.stakes) ?? input.brief.stakes,
+    playerFacingNarrative(input.introPlan.stakes) ?? input.brief.stakes,
   );
   const firstPrompt =
     playerFacingGerman(input.introPlan.firstPrompt) ??
@@ -296,7 +296,7 @@ function buildSetupBeats(input: {
   const planned = input.introPlan.setupBeats
     .flatMap((beat) => {
       const title = playerFacingGerman(beat.title);
-      const text = playerFacingGerman(beat.text);
+      const text = playerFacingNarrative(beat.text);
       return title && text ? [{ title, text }] : [];
     })
     .filter(
@@ -338,7 +338,7 @@ function buildCharacterIntro(character: CharacterIntroInput) {
   const identity = [character.race, character.className]
     .filter(Boolean)
     .join(" ");
-  const visibleDetail = playerFacingGerman(character.appearance);
+  const visibleDetail = playerFacingNarrative(character.appearance);
   const summary = identity || "Mitglied der Gruppe";
   const prompt = `${character.name}, beschreibe kurz, was die anderen zuerst an dir bemerken und wo du im Bild stehst.`;
   const text = [
@@ -390,7 +390,7 @@ function fallbackFirstPrompt(names: string[]) {
   return `Bevor ihr handelt: ${partyLabel(names)}, beschreibt kurz, was die anderen zuerst an euch bemerken.`;
 }
 
-function buildOpeningBrief(input: {
+export function buildOpeningBrief(input: {
   campaignTitle: string;
   theme: string;
   sceneTitle: string;
@@ -411,23 +411,16 @@ function buildOpeningBrief(input: {
   act1Beats: string[];
   introPlan: OpeningIntroPlan;
 }) {
-  const partyName = partyLabel(input.characters.map((c) => c.name));
   const location = input.locationName ?? "diesem Ort";
-  const plannedObjective = playerFacingGerman(input.introPlan.objective);
-  const plannedStakes = playerFacingGerman(input.introPlan.stakes);
-  const playerHook = playerFacingGerman(input.hook);
-  const playerSummary = playerFacingGerman(input.summary);
-  const playerThread = input.threads.map(playerFacingGerman).find(Boolean);
-  const playerAct1Beat = input.act1Beats.map(playerFacingGerman).find(Boolean);
-  const playerAct1Summary = playerFacingGerman(input.act1Summary);
-  const mission =
-    plannedObjective ??
-    playerHook ??
-    playerSummary ??
-    playerThread ??
-    playerAct1Beat ??
-    playerAct1Summary ??
-    `der erste Auftrag von ${input.campaignTitle} genau hier beginnt`;
+  const plannedObjective = playerFacingNarrative(input.introPlan.objective);
+  const plannedStakes = playerFacingNarrative(input.introPlan.stakes);
+  const playerHook = playerFacingNarrative(input.hook);
+  const playerSummary = playerFacingNarrative(input.summary);
+  const playerThread = input.threads.map(playerFacingNarrative).find(Boolean);
+  const playerAct1Beat = input.act1Beats
+    .map(playerFacingNarrative)
+    .find(Boolean);
+  const playerAct1Summary = playerFacingNarrative(input.act1Summary);
   const objective = normalizeSentence(
     plannedObjective ??
       playerHook ??
@@ -437,12 +430,14 @@ function buildOpeningBrief(input: {
         location,
       )} beginnt.`,
   );
-  const whyHere = buildWhyHere({
-    partyName,
-    characterCount: input.characters.length,
-    location,
-    mission,
-  });
+  const whyHere = normalizeSentence(
+    playerHook ??
+      playerSummary ??
+      playerThread ??
+      playerAct1Beat ??
+      playerAct1Summary ??
+      `Der erste Auftrag von ${input.campaignTitle} beginnt ${locationPhrase(location)}`,
+  );
   const stakes = normalizeSentence(
     plannedStakes ??
       playerSummary ??
@@ -473,23 +468,6 @@ function buildOpeningBrief(input: {
   };
 }
 
-function buildWhyHere(input: {
-  partyName: string;
-  characterCount: number;
-  location: string;
-  mission: string;
-}) {
-  const reason = lowerFirst(stripTerminalPunctuation(input.mission));
-  const location = locationPhrase(input.location);
-  if (input.characterCount === 0) {
-    return `Die Gruppe ist ${location}, weil ${reason}.`;
-  }
-  if (input.characterCount === 1) {
-    return `${input.partyName} ist ${location}, weil ${reason}.`;
-  }
-  return `${input.partyName} sind ${location}, weil ${reason}.`;
-}
-
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -512,15 +490,6 @@ function normalizeSentence(value: string) {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
-function stripTerminalPunctuation(value: string) {
-  return value.trim().replace(/[.!?]+$/, "");
-}
-
-function lowerFirst(value: string) {
-  if (!value) return value;
-  return value.charAt(0).toLocaleLowerCase("de-DE") + value.slice(1);
-}
-
 function firstSentence(value: string) {
   const trimmed = value.trim();
   const match = trimmed.match(/^(.+?[.!?])(\s|$)/);
@@ -532,6 +501,18 @@ function playerFacingGerman(value: string | null) {
   const trimmed = value.trim();
   if (looksEnglish(trimmed)) return null;
   return trimmed;
+}
+
+function playerFacingNarrative(value: string | null) {
+  const german = playerFacingGerman(value);
+  if (!german || looksLikeWritingDirection(german)) return null;
+  return german;
+}
+
+function looksLikeWritingDirection(value: string) {
+  return /^(?:bitte\s+)?(?:beschreibe|zeige|stelle|inszeniere|etabliere|schildere|führe|beginne|öffne|lass|nutze)\b/iu.test(
+    value.trim(),
+  );
 }
 
 function localizeLocationName(value: string | null) {
@@ -548,7 +529,7 @@ function localizeLocationDescription(
   value: string | null,
   locationName: string | null,
 ) {
-  const german = playerFacingGerman(value);
+  const german = playerFacingNarrative(value);
   if (german) return german;
   const subject = locationSubject(locationName);
   return `${subject} wirkt angespannt: Spuren, Zeugen und mögliche Gefahren liegen offen vor euch.`;

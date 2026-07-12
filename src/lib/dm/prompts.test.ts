@@ -89,6 +89,15 @@ describe("worldbuild lore prompt contract", () => {
       "must not assign thoughts, decisions, dialogue, or actions to player characters",
     );
   });
+
+  it("requires final prose instead of directions to the DM", () => {
+    expect(WORLDBUILD_PROMPT).toContain(
+      "must contain final table-ready prose, never writing directions",
+    );
+    expect(WORLDBUILD_PROMPT).toContain(
+      'Never start them with imperatives such as "Beschreibe", "Zeige", or "Stelle ... vor"',
+    );
+  });
 });
 
 describe("live DM lore digest", () => {
