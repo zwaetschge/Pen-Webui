@@ -291,6 +291,7 @@ function buildSetupBeats(input: {
   locationName: string | null;
   locationDescription: string | null;
   presentNpcNames: string[];
+  characters?: CharacterIntroInput[];
 }) {
   const planned = input.introPlan.setupBeats
     .flatMap((beat) => {
@@ -298,7 +299,13 @@ function buildSetupBeats(input: {
       const text = playerFacingGerman(beat.text);
       return title && text ? [{ title, text }] : [];
     })
+    .filter(
+      (beat) =>
+        !input.characters?.length || !isGenericPartyArrivalBeat(beat.text),
+    )
     .slice(0, 6);
+  if (planned.length >= 4) return planned;
+
   const npcNames = input.presentNpcNames.slice(0, 3);
   const fallback = [
     input.brief.whyHere,
@@ -313,6 +320,18 @@ function buildSetupBeats(input: {
       return normalized ? [normalized] : [];
     });
   return [...planned, ...fallback].slice(0, 6);
+}
+
+function isGenericPartyArrivalBeat(value: string) {
+  const normalized = value.trim().toLocaleLowerCase("de-DE");
+  return (
+    /^(die charaktere|die gruppe|alle charaktere|die abenteurer)\b/u.test(
+      normalized,
+    ) &&
+    /\b(erreichen|kommt|kommen|gelangen|treffen|betreten|finden sich)\b/u.test(
+      normalized,
+    )
+  );
 }
 
 function buildCharacterIntro(character: CharacterIntroInput) {

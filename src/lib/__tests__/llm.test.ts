@@ -167,3 +167,104 @@ describe("Codex exec argv", () => {
     expect(args).not.toContain("--output-schema");
   });
 });
+
+describe("Codex JSON object completion", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  beforeEach(() => {
+    vi.resetModules();
+    spawnMock.mockReset();
+    vi.stubEnv("NODE_ENV", "test");
+    process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
+    process.env.S3_ACCESS_KEY = "test";
+    process.env.S3_SECRET_KEY = "test";
+    process.env.SECRET_BOX_KEY =
+      "0000000000000000000000000000000000000000000000000000000000000000";
+    process.env.INVITE_HMAC_SECRET = "test-invite-secret";
+    process.env.DM_LLM_PROVIDER = "codex-cli";
+    process.env.CODEX_MODEL_DM = "auto";
+    process.env.CODEX_EXEC_TIMEOUT_SECONDS = "10";
+  });
+
+  it("does not pass large JSON schemas to codex exec for JSON object calls", async () => {
+    spawnMock.mockImplementation((_command: string, args: string[]) => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdin: PassThrough;
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = vi.fn();
+
+      const outputPath = args[args.indexOf("--output-last-message") + 1];
+      queueMicrotask(() => {
+        writeFileSync(outputPath, JSON.stringify({ ok: true }), "utf8");
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    const { completeDmJsonObject } = await import("@/lib/dm/llm");
+
+    await expect(
+      completeDmJsonObject({
+        userId: "user_1",
+        system: "Return JSON.",
+        user: "Return { ok: true }.",
+        outputSchema: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args).toContain("--output-last-message");
+    expect(args).not.toContain("--output-schema");
+  });
+
+  it("parses the first complete JSON object when codex appends extra output", async () => {
+    spawnMock.mockImplementation((_command: string, args: string[]) => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdin: PassThrough;
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = vi.fn();
+
+      const outputPath = args[args.indexOf("--output-last-message") + 1];
+      queueMicrotask(() => {
+        writeFileSync(
+          outputPath,
+          '{"ok":true,"nested":{"value":"brace } inside string"}}\n{"extra":true}',
+          "utf8",
+        );
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    const { completeDmJsonObject } = await import("@/lib/dm/llm");
+
+    await expect(
+      completeDmJsonObject({
+        userId: "user_1",
+        system: "Return JSON.",
+        user: "Return { ok: true }.",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      nested: { value: "brace } inside string" },
+    });
+  });
+});

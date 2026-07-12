@@ -323,6 +323,9 @@ CONSTRAINTS:
   forbiddenContradictions as hard constraints. Preserve source names, places,
   relationships, tone, and timeline unless the host explicitly asks for an
   original reskin.
+- When uploaded/source lore is present, the task is adaptation, not replacement:
+  keep the source setting, cast, factions, central mystery, and tone as the
+  campaign canon, and apply D&D 5e only as the rules/encounter framework.
 ${FAN_REFERENCE_RULES}
 - Apply the fan campaign reference rules to the title, theme, house rules, and
   seed ideas before inventing substitutes.

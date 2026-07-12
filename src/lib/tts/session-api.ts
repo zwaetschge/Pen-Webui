@@ -323,7 +323,7 @@ function readyBody(
     status: "ready" as const,
     cacheId: cached.id,
     audioUrl: inviteToken
-      ? `/api/invite/sessions/${encodeURIComponent(sessionId)}/tts/${encodeURIComponent(
+      ? `/api/invite/sessions/${encodeURIComponent(sessionId)}/tts/audio/${encodeURIComponent(
           cached.id,
         )}/${encodeURIComponent(inviteToken)}`
       : `/api/sessions/${encodeURIComponent(sessionId)}/tts/${encodeURIComponent(

@@ -34,9 +34,14 @@ export function parseGuestCredential(token: string): GuestCredential | null {
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   const [payload, signature] = parts;
+  const expectedSignature = sign(payload);
   const actual = fromB64url(signature);
-  const expected = fromB64url(sign(payload));
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+  const expected = fromB64url(expectedSignature);
+  if (
+    actual.length !== expected.length ||
+    !timingSafeEqual(actual, expected) ||
+    signature !== expectedSignature
+  ) {
     return null;
   }
 

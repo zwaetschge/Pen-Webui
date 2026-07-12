@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import { AudioLineButton } from "./AudioLineButton";
 import { useTtsPlayback } from "./TtsProvider";
 
-export function CinematicView() {
+export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean }) {
   const scene = useGame((s) => s.scene);
   const chat = useGame((s) => s.chat);
   const dialogue = latestDialoguePresentation(chat, scene);
@@ -34,12 +34,17 @@ export function CinematicView() {
     const isNewDialogue = lastAutoplayDialogueIdRef.current !== dialogueId;
     lastAutoplayDialogueIdRef.current = dialogueId;
 
-    if (!isNewDialogue || !autoplay || dialogueKind === "player") {
+    if (
+      !audioEnabled ||
+      !isNewDialogue ||
+      !autoplay ||
+      dialogueKind === "player"
+    ) {
       return;
     }
 
     void play(dialogueId);
-  }, [autoplay, dialogueId, dialogueKind, play]);
+  }, [audioEnabled, autoplay, dialogueId, dialogueKind, play]);
 
   return (
     <div className="scene-stage relative h-full w-full overflow-hidden bg-ink-600">
@@ -127,7 +132,9 @@ export function CinematicView() {
           >
             <div className="renpy-dialogue-box mx-auto max-h-full max-w-[82rem] overflow-y-auto px-4 pb-4 pt-5 shadow-2xl backdrop-blur sm:px-6 sm:pb-5 sm:pt-6 lg:max-h-[42vh]">
               <div className="renpy-nameplate absolute -top-3 left-4 right-4 flex items-center gap-2 px-2 py-1.5 sm:left-6 sm:right-6">
-                <AudioLineButton eventId={dialogue.id} compact />
+                {audioEnabled ? (
+                  <AudioLineButton eventId={dialogue.id} compact />
+                ) : null}
                 <div className="flex min-w-0 items-baseline gap-2 overflow-hidden">
                   <span className="truncate font-display text-xs uppercase tracking-[0.22em] text-parchment-50">
                     {dialogue.speakerLabel}
@@ -138,7 +145,7 @@ export function CinematicView() {
                     </span>
                   ) : null}
                 </div>
-                {dialogue.kind !== "player" ? (
+                {audioEnabled && dialogue.kind !== "player" ? (
                   <button
                     type="button"
                     aria-pressed={autoplay}

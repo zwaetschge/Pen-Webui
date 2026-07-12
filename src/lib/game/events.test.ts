@@ -115,6 +115,25 @@ describe("eventForClient", () => {
     expect(eventForClient(update, "host")).toBe(update);
   });
 
+  it("keeps only the public DM fence when sanitizing player errors", () => {
+    const dmError = event({
+      type: "dm_error",
+      payload: {
+        message: "private upstream failure",
+        stack: "secret stack",
+        toolArguments: { password: "secret" },
+        _dmTurnFence: 47,
+      },
+    });
+
+    expect(eventForClient(dmError, "host")).toBe(dmError);
+    expect(eventForClient(dmError, "player")?.payload).toEqual({
+      message:
+        "Der DM hatte ein internes Problem. Bitte sag der Spielleitung Bescheid.",
+      _dmTurnFence: 47,
+    });
+  });
+
   it("replays lifecycle end events to players", () => {
     const gameOver = event({
       type: "game_over",

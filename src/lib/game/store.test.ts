@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { BOOTSTRAP_EVENT_TYPES } from "./events";
+import { eventForClient } from "./events";
 import { useGame, type ServerEvent } from "./store";
 
 function event(overrides: Partial<ServerEvent>): ServerEvent {
@@ -35,6 +36,164 @@ describe("game store event ingestion", () => {
     useGame.getState().ingest(ev);
 
     expect(useGame.getState().chat).toHaveLength(1);
+  });
+
+  it("ignores predecessor finalization and content after a successor fence", () => {
+    useGame.getState().ingest(
+      event({
+        id: "successor_thinking",
+        type: "dm_thinking",
+        payload: { active: true, _dmTurnFence: 2 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "predecessor_done",
+        type: "dm_thinking",
+        payload: { active: false, _dmTurnFence: 1 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "predecessor_content",
+        type: "narrate",
+        payload: { text: "stale", _dmTurnFence: 1 },
+      }),
+    );
+
+    expect(useGame.getState().dmThinking).toBe(true);
+    expect(useGame.getState().chat).toEqual([]);
+  });
+
+  it("accepts an ordered lifecycle with the same DM fence", () => {
+    useGame.getState().ingest(
+      event({
+        id: "thinking",
+        type: "dm_thinking",
+        payload: { active: true, _dmTurnFence: 7 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "content",
+        type: "narrate",
+        payload: { text: "current", _dmTurnFence: 7 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "done",
+        type: "dm_thinking",
+        payload: { active: false, _dmTurnFence: 7 },
+      }),
+    );
+
+    expect(useGame.getState().dmThinking).toBe(false);
+    expect(useGame.getState().chat).toEqual([
+      expect.objectContaining({ kind: "narrate", text: "current" }),
+    ]);
+  });
+
+  it("does not let a late predecessor thinking event replace a successor", () => {
+    useGame.getState().ingest(
+      event({
+        id: "successor_done",
+        type: "dm_thinking",
+        payload: { active: false, _dmTurnFence: 9 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "bootstrap_after_successor",
+        type: "session_bootstrap_v12",
+        payload: { sceneTitle: "Current scene" },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "predecessor_thinking",
+        type: "dm_thinking",
+        payload: { active: true, _dmTurnFence: 8 },
+      }),
+    );
+
+    expect(useGame.getState().dmThinking).toBe(false);
+    expect(useGame.getState().scene.sceneTitle).toBe("Current scene");
+  });
+
+  it("keeps legacy unfenced events compatible", () => {
+    useGame.getState().ingest(
+      event({
+        id: "fenced",
+        type: "dm_thinking",
+        payload: { active: false, _dmTurnFence: 3 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "legacy",
+        type: "narrate",
+        payload: { text: "legacy replay" },
+      }),
+    );
+
+    expect(useGame.getState().chat).toEqual([
+      expect.objectContaining({ text: "legacy replay" }),
+    ]);
+  });
+
+  it("accepts a Redis-time fence after the persisted counter was reset", () => {
+    useGame.getState().ingest(
+      event({
+        id: "old-high-water",
+        type: "dm_thinking",
+        payload: { active: true, _dmTurnFence: 42 },
+      }),
+    );
+
+    const postResetTimeFence = 1_700_000_000_000_123;
+    useGame.getState().ingest(
+      event({
+        id: "post-reset",
+        type: "narrate",
+        payload: {
+          text: "fresh after reset",
+          _dmTurnFence: postResetTimeFence,
+        },
+      }),
+    );
+
+    expect(useGame.getState().highestDmTurnFence).toBe(postResetTimeFence);
+    expect(useGame.getState().chat).toEqual([
+      expect.objectContaining({ text: "fresh after reset" }),
+    ]);
+  });
+
+  it("ignores a stale player-visible DM error after sanitization", () => {
+    useGame.getState().ingest(
+      event({
+        id: "current",
+        type: "dm_thinking",
+        payload: { active: true, _dmTurnFence: 42 },
+      }),
+    );
+    const stale = eventForClient(
+      event({
+        id: "stale-error",
+        type: "dm_error",
+        payload: {
+          message: "old private error",
+          debug: "do not leak",
+          _dmTurnFence: 41,
+        },
+      }),
+      "player",
+    );
+
+    useGame.getState().ingest(stale!);
+
+    expect(useGame.getState().dmThinking).toBe(true);
+    expect(useGame.getState().chat).toEqual([]);
   });
 
   it("normalizes legacy string setup beats from an unversioned bootstrap", () => {

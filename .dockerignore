@@ -1,6 +1,7 @@
 node_modules
 .next
 .git
+.worktrees
 .env
 .env.local
 .env.*.local

@@ -27,6 +27,7 @@ type TtsContextValue = {
 type TtsProviderProps = {
   sessionId: string;
   inviteToken?: string;
+  enabled?: boolean;
   children: ReactNode;
 };
 
@@ -42,6 +43,7 @@ const AUTOPLAY_KEY = "plum.tts.autoplay.v1";
 export function TtsProvider({
   sessionId,
   inviteToken,
+  enabled = true,
   children,
 }: TtsProviderProps) {
   const playbackRef = useRef<ActivePlayback | null>(null);
@@ -83,8 +85,10 @@ export function TtsProvider({
   );
 
   useEffect(() => {
-    setAutoplayState(window.localStorage.getItem(AUTOPLAY_KEY) === "true");
-  }, []);
+    setAutoplayState(
+      enabled && window.localStorage.getItem(AUTOPLAY_KEY) === "true",
+    );
+  }, [enabled]);
 
   useEffect(
     () => () => {
@@ -100,9 +104,10 @@ export function TtsProvider({
   );
 
   const setAutoplay = useCallback((value: boolean) => {
+    if (!enabled) return;
     setAutoplayState(value);
     window.localStorage.setItem(AUTOPLAY_KEY, value ? "true" : "false");
-  }, []);
+  }, [enabled]);
 
   const stop = useCallback(() => {
     requestIdRef.current += 1;
@@ -116,6 +121,7 @@ export function TtsProvider({
 
   const play = useCallback(
     async (eventId: string) => {
+      if (!enabled) return;
       requestIdRef.current += 1;
       const requestId = requestIdRef.current;
       const previousActiveId = activeEventIdRef.current;
@@ -191,7 +197,7 @@ export function TtsProvider({
         setActiveEvent(null);
       }
     },
-    [disposePlayback, inviteToken, sessionId, setActiveEvent, setEventStatus],
+    [disposePlayback, enabled, inviteToken, sessionId, setActiveEvent, setEventStatus],
   );
 
   const toggle = useCallback(
@@ -219,6 +225,10 @@ export function TtsProvider({
   );
 
   return <TtsContext.Provider value={value}>{children}</TtsContext.Provider>;
+}
+
+export function isTtsExperienceEnabled(experience: "table" | "companion") {
+  return experience === "table";
 }
 
 export function useTtsPlayback() {
