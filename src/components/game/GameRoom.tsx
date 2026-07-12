@@ -16,6 +16,7 @@ import { DiceRollOverlay } from "./DiceRollOverlay";
 import { isTtsExperienceEnabled, TtsProvider } from "./TtsProvider";
 import { VoiceMenu } from "./VoiceMenu";
 import { CompanionOverview } from "./CompanionOverview";
+import { CastGlyph, CastGuideDialog } from "./CastGuideDialog";
 import type { GameRoomCharacter } from "./types";
 
 const TacticalMap = dynamic(
@@ -48,10 +49,12 @@ export function GameRoom(props: {
   const [tableOpen, setTableOpen] = useState(false);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
+  const [castGuideOpen, setCastGuideOpen] = useState(false);
   const [companionSceneOpen, setCompanionSceneOpen] = useState(false);
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
   const voiceMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pairingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const castTriggerRef = useRef<HTMLButtonElement | null>(null);
   const roomRef = useRef<HTMLDivElement | null>(null);
   const isTable = props.experience === "table";
   const ttsEnabled = isTtsExperienceEnabled(props.experience);
@@ -87,7 +90,10 @@ export function GameRoom(props: {
     >
       <div
         ref={roomRef}
-        className={cn("tabletop-room relative flex min-h-0 flex-col", roomHeight)}
+        className={cn(
+          "tabletop-room relative flex min-h-0 flex-col",
+          roomHeight,
+        )}
       >
         <header
           className={cn(
@@ -120,6 +126,17 @@ export function GameRoom(props: {
                   className="min-h-10 rounded-md border border-brass-400/65 bg-brass-700/35 px-4 py-1.5 text-sm text-parchment-100 shadow-brass hover:bg-brass-600/45"
                 >
                   Spieler verbinden
+                </button>
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded={castGuideOpen}
+                  ref={castTriggerRef}
+                  onClick={() => setCastGuideOpen(true)}
+                  className="flex min-h-10 items-center gap-2 rounded-md border border-brass-400/75 bg-brass-700/35 px-3 py-1.5 text-sm text-parchment-100 shadow-brass transition hover:bg-brass-600/45"
+                >
+                  <CastGlyph className="size-5" />
+                  <span>Auf TV</span>
                 </button>
                 <button
                   type="button"
@@ -197,13 +214,21 @@ export function GameRoom(props: {
         ) : null}
 
         {isTable ? (
-          <TablePairingDialog
-            open={pairingOpen}
-            sessionId={props.sessionId}
-            campaignTitle={props.campaignTitle}
-            triggerRef={pairingTriggerRef}
-            onClose={() => setPairingOpen(false)}
-          />
+          <>
+            <CastGuideDialog
+              open={castGuideOpen}
+              triggerRef={castTriggerRef}
+              onClose={() => setCastGuideOpen(false)}
+              onEnterDisplayMode={enterDisplayMode}
+            />
+            <TablePairingDialog
+              open={pairingOpen}
+              sessionId={props.sessionId}
+              campaignTitle={props.campaignTitle}
+              triggerRef={pairingTriggerRef}
+              onClose={() => setPairingOpen(false)}
+            />
+          </>
         ) : null}
 
         <div
@@ -248,7 +273,7 @@ export function GameRoom(props: {
                 <aside
                   aria-hidden={!tableOpen}
                   className={cn(
-                    "tabletop-side table-drawer absolute bottom-3 right-3 top-3 z-30 flex w-[min(28rem,calc(100%-1.5rem))] min-h-0 flex-col overflow-hidden border border-brass-700/45 bg-ink-500/88 transition duration-200",
+                    "tabletop-side table-drawer bg-ink-500/88 absolute bottom-3 right-3 top-3 z-30 flex min-h-0 w-[min(28rem,calc(100%-1.5rem))] flex-col overflow-hidden border border-brass-700/45 transition duration-200",
                     tableOpen
                       ? "translate-x-0 opacity-100"
                       : "pointer-events-none translate-x-[calc(100%+1rem)] opacity-0",

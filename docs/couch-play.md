@@ -11,10 +11,13 @@ Plum Tabletop trennt den gemeinsamen Tisch vom persönlichen Companion:
 1. Lege in der Kampagne die gewünschten Spielerfiguren an. Vier Figuren sind
    ein guter Standard, aber keine feste Grenze.
 2. Starte die Session und öffne den Gemeinschaftstisch.
-3. Übertrage diesen Browser-Tab mit Chrome auf den Chromecast und aktiviere
-   `Vollbild` im Tisch-Header.
-4. Wähle `Spieler verbinden`. Für jede freie Figur erscheint ein eigener QR-Code.
-5. Jede Person scannt den QR-Code ihrer Figur. Das Handy verbindet sich ohne
+3. Wähle im Tisch-Header `Auf TV`. Plum zeigt passend zu deinem Gerät den
+   Chromecast-Ablauf. Am Computer überträgst du den aktuellen Tab über
+   `Chrome-Menü → Streamen, speichern und teilen → Streamen… → Tab streamen`;
+   unter Android spiegelst du den Bildschirm über die Google Home App.
+4. Aktiviere danach im Chromecast-Dialog `Vollbild starten`.
+5. Wähle `Spieler verbinden`. Für jede freie Figur erscheint ein eigener QR-Code.
+6. Jede Person scannt den QR-Code ihrer Figur. Das Handy verbindet sich ohne
    Authelia-Login und bleibt an diese Figur gebunden.
 
 ## Während des Spiels
