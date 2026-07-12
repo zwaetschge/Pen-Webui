@@ -341,6 +341,8 @@ ${FAN_REFERENCE_RULES}
 - introPlan.setupBeats must contain 3-6 chronological beats. Each title is a
   natural 2-5 word German display heading. Each text is 1-2 idiomatic German
   present-tense sentences describing observable action.
+- introPlan.establishingShot, setupBeats, objective, and stakes must contain final table-ready prose, never writing directions to the DM.
+  Never start them with imperatives such as "Beschreibe", "Zeige", or "Stelle ... vor".
 - Beat text must not use meta-language and must not assign thoughts, decisions, dialogue, or actions to player characters.
 - introPlan.characterHookStyle must tell the DM how to introduce each real
   player character later, using their name and visible sheet details without
