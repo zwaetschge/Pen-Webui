@@ -7,6 +7,7 @@ import { CLIENT_EVENT_TYPES } from "./events";
 export function useGameStream(opts: {
   sessionId: string;
   inviteToken?: string;
+  displayToken?: string;
 }) {
   const ingest = useGame((s) => s.ingest);
   const setConnection = useGame((s) => s.setConnection);
@@ -15,11 +16,15 @@ export function useGameStream(opts: {
 
   useEffect(() => {
     reset();
-    const path = opts.inviteToken
-      ? `/api/invite/sessions/${opts.sessionId}/stream/${encodeURIComponent(
-          opts.inviteToken,
-        )}`
-      : `/api/sessions/${opts.sessionId}/stream`;
+    const path = opts.displayToken
+      ? `/api/display/sessions/${encodeURIComponent(
+          opts.sessionId,
+        )}/stream/${encodeURIComponent(opts.displayToken)}`
+      : opts.inviteToken
+        ? `/api/invite/sessions/${opts.sessionId}/stream/${encodeURIComponent(
+            opts.inviteToken,
+          )}`
+        : `/api/sessions/${opts.sessionId}/stream`;
     const url = new URL(path, window.location.origin);
 
     const es = new EventSource(url.toString(), { withCredentials: true });
@@ -58,5 +63,13 @@ export function useGameStream(opts: {
     return () => {
       es.close();
     };
-  }, [opts.sessionId, opts.inviteToken, ingest, setConnection, setRole, reset]);
+  }, [
+    opts.sessionId,
+    opts.inviteToken,
+    opts.displayToken,
+    ingest,
+    setConnection,
+    setRole,
+    reset,
+  ]);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildIntroDirectorChapters,
   introDirectorStorageKey,
+  playerFacingLegacyOpeningCopy,
 } from "./intro-director";
 import type { IntroSequenceState } from "./store";
 
@@ -75,6 +76,16 @@ describe("intro director", () => {
       portraitUrl: "https://assets.example/robert.png",
     });
     expect(chapters[4]?.body).toContain("Stellt euch kurz vor.");
+    expect(chapters.map((chapter) => chapter.label)).toEqual([
+      "Ort",
+      "Auftakt",
+      "Auftakt",
+      "Auftritt",
+      "Auftrag",
+    ]);
+    expect(chapters.map((chapter) => chapter.label)).not.toEqual(
+      expect.arrayContaining(["Totale", "Regie", "Kamera", "Spannung"]),
+    );
   });
 
   it("renders an explicit arrival beat title", () => {
@@ -132,6 +143,23 @@ describe("intro director", () => {
           ...intro.setupBeats.slice(1),
         ],
       }),
+    );
+  });
+
+  it("turns legacy prompt directions into natural player-facing copy", () => {
+    expect(
+      playerFacingLegacyOpeningCopy(
+        "Beschreibe Cypress Hollow als regennasse Kleinstadt unter einem bleigrauen Nachmittag.",
+      ),
+    ).toBe(
+      "Cypress Hollow zeigt sich als regennasse Kleinstadt unter einem bleigrauen Nachmittag.",
+    );
+    expect(
+      playerFacingLegacyOpeningCopy(
+        "Lia ist in Cypress Hollow, weil die Gruppe soll: Entscheiden, ob sie eingreift.",
+      ),
+    ).toBe(
+      "Lia ist in Cypress Hollow. Die Gruppe soll entscheiden, ob sie eingreift.",
     );
   });
 });

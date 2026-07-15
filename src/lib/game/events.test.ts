@@ -19,7 +19,7 @@ function event(overrides: Partial<GameEvent>): GameEvent {
 
 describe("eventForClient", () => {
   it("exports the complete bootstrap event sequence through the current version", () => {
-    expect(CURRENT_BOOTSTRAP_EVENT_TYPE).toBe("session_bootstrap_v12");
+    expect(CURRENT_BOOTSTRAP_EVENT_TYPE).toBe("session_bootstrap_v13");
     expect(BOOTSTRAP_EVENT_TYPES).toEqual([
       "session_bootstrap",
       "session_bootstrap_v2",
@@ -33,17 +33,22 @@ describe("eventForClient", () => {
       "session_bootstrap_v10",
       "session_bootstrap_v11",
       "session_bootstrap_v12",
+      "session_bootstrap_v13",
     ]);
   });
 
   it("keeps the current bootstrap event visible to live clients", () => {
     const bootstrap = event({
-      type: "session_bootstrap_v12",
+      type: "session_bootstrap_v13",
       payload: { sceneTitle: "Opening" },
     });
 
-    expect(CLIENT_EVENT_TYPES).toContain("session_bootstrap_v12");
+    expect(CLIENT_EVENT_TYPES).toContain("session_bootstrap_v13");
     expect(eventForClient(bootstrap, "host")).toBe(bootstrap);
+  });
+
+  it("keeps v12 as a legacy bootstrap so existing sessions can be repaired", () => {
+    expect(BOOTSTRAP_EVENT_TYPES).toContain("session_bootstrap_v12");
   });
 
   it("does not replay internal transcript events to clients", () => {
@@ -80,10 +85,10 @@ describe("eventForClient", () => {
 
     expect(visible?.payload).toMatchObject({
       notation: "verdeckter Wurf",
-      total: 12,
       breakdown: "",
       hidden: true,
     });
+    expect(visible?.payload.total).toBeUndefined();
     expect(visible?.payload.reason).toBeUndefined();
     expect(visible?.payload.rolls).toBeUndefined();
   });

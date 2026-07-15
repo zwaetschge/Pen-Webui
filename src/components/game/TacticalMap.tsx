@@ -72,6 +72,7 @@ type Props = {
   localCharacters?: Array<{ id: string; name: string }>;
   selectedTokenId?: string | null;
   onSelectedTokenChange?: (tokenId: string | null) => void;
+  readOnly?: boolean;
 };
 
 export function TacticalMap(props: Props) {
@@ -401,11 +402,12 @@ export function TacticalMap(props: Props) {
         updateInitials(c, t);
         syncTokenImage(c as TokenContainer, t);
       }
-      const canSelect = canSelectToken({
-        token: t,
-        localCharacterIds,
-        combat,
-      });
+      const canSelect =
+        canSelectToken({
+          token: t,
+          localCharacterIds,
+          combat,
+        }) && !props.readOnly;
       configureTokenSelection(c, t, canSelect, () => {
         updateSelectedTokenId((current) => (current === t.id ? null : t.id));
       });
@@ -423,6 +425,7 @@ export function TacticalMap(props: Props) {
     pixiReadyVersion,
     tokens,
     updateSelectedTokenId,
+    props.readOnly,
   ]);
 
   useEffect(() => {

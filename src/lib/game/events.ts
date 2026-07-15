@@ -2,7 +2,7 @@ import type { GameEvent } from "./bus";
 
 export type ClientRole = "host" | "player";
 
-export const CURRENT_BOOTSTRAP_EVENT_TYPE = "session_bootstrap_v12";
+export const CURRENT_BOOTSTRAP_EVENT_TYPE = "session_bootstrap_v13";
 
 export const BOOTSTRAP_EVENT_TYPES = [
   "session_bootstrap",
@@ -16,6 +16,7 @@ export const BOOTSTRAP_EVENT_TYPES = [
   "session_bootstrap_v9",
   "session_bootstrap_v10",
   "session_bootstrap_v11",
+  "session_bootstrap_v12",
   CURRENT_BOOTSTRAP_EVENT_TYPE,
 ] as const;
 
@@ -68,6 +69,7 @@ const CLIENT_EVENT_TYPE_SET = new Set<string>(CLIENT_EVENT_TYPES);
 
 const PLAYER_HIDDEN_ROLL_PAYLOAD = {
   notation: "verdeckter Wurf",
+  total: undefined,
   breakdown: "",
   reason: undefined,
   rolls: undefined,
@@ -121,9 +123,7 @@ export function eventForClient(
 }
 
 function publicDmTurnFence(value: unknown): number | null {
-  return typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
 }

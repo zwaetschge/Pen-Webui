@@ -1,7 +1,18 @@
-export function ttsPostPath(sessionId: string, inviteToken?: string) {
-  return inviteToken
-    ? `/api/invite/sessions/${encodeURIComponent(sessionId)}/tts/${encodeURIComponent(
-        inviteToken,
-      )}`
-    : `/api/sessions/${encodeURIComponent(sessionId)}/tts`;
+export type TtsAccess =
+  | { kind: "invite"; token: string }
+  | { kind: "display"; token: string };
+
+export function ttsPostPath(sessionId: string, access?: TtsAccess) {
+  const encodedSession = encodeURIComponent(sessionId);
+  if (access?.kind === "invite") {
+    return `/api/invite/sessions/${encodedSession}/tts/${encodeURIComponent(
+      access.token,
+    )}`;
+  }
+  if (access?.kind === "display") {
+    return `/api/display/sessions/${encodedSession}/tts/${encodeURIComponent(
+      access.token,
+    )}`;
+  }
+  return `/api/sessions/${encodedSession}/tts`;
 }

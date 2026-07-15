@@ -31,6 +31,8 @@ const config: Config = {
           500: "#a47830",
           600: "#7d5a22",
           700: "#5a4017",
+          800: "#3f2b0f",
+          900: "#271a09",
         },
         ink: {
           50: "#e8e6dd",
@@ -40,6 +42,8 @@ const config: Config = {
           400: "#272620",
           500: "#191814",
           600: "#0e0d0a",
+          700: "#080705",
+          800: "#050403",
         },
         blood: {
           500: "#8a1a1a",
@@ -56,7 +60,8 @@ const config: Config = {
           "radial-gradient(circle at 30% 20%, rgba(212,182,106,0.08), transparent 50%), radial-gradient(circle at 70% 80%, rgba(138,26,26,0.06), transparent 60%)",
       },
       boxShadow: {
-        brass: "0 0 0 1px rgba(195,154,78,0.4), 0 8px 24px -8px rgba(0,0,0,0.6)",
+        brass:
+          "0 0 0 1px rgba(195,154,78,0.4), 0 8px 24px -8px rgba(0,0,0,0.6)",
       },
     },
   },

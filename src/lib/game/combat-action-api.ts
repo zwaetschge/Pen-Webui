@@ -14,6 +14,7 @@ import {
   type MovementToken,
 } from "./movement";
 import { movementGridForSession } from "./movement-grid";
+import { schedulePendingTurnDrain } from "./pending-turn-waker";
 import {
   activeCombatStateForSession,
   combatResourcesForTurn,
@@ -736,6 +737,8 @@ async function maybeEndCombat(input: {
       summary: "Session beendet: Game Over.",
     });
   }
+
+  schedulePendingTurnDrain(input.sessionId);
 
   return true;
 }

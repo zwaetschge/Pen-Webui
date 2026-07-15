@@ -108,6 +108,11 @@ describe("commitBlueprint lore persistence", () => {
         ],
       }),
     );
+    expect(db.sceneCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ title: "Auftakt" }),
+      }),
+    );
   });
 
   it("accepts titled setup beats and rejects beats without a title", async () => {

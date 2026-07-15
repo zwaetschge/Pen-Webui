@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  ACTION_INPUT_LABEL,
   actionChoiceButtonClassName,
   actionChoiceGridClassName,
   actionErrorLabel,
   COMBAT_ACTION_BUTTONS,
   combatActionGridClassName,
+  explorationInputDisabled,
+  queuedActionMessage,
   selectActionCards,
   selectNextActions,
+  shouldClearQueueNotice,
 } from "./ActionBar";
 
 describe("selectNextActions", () => {
@@ -28,7 +32,12 @@ describe("selectActionCards", () => {
     expect(
       selectActionCards({
         scene: {
-          nextActions: ["Inspect the well", "Question the guard", "Sneak", "Run"],
+          nextActions: [
+            "Inspect the well",
+            "Question the guard",
+            "Sneak",
+            "Run",
+          ],
         },
       }),
     ).toEqual([
@@ -87,5 +96,43 @@ describe("action errors", () => {
     expect(actionErrorLabel("dm_busy", 409)).toBe(
       "Der DM verarbeitet gerade eine andere Aktion. Gleich erneut versuchen.",
     );
+  });
+
+  it("turns queue limits into player-facing German", () => {
+    expect(actionErrorLabel("turn_queue_actor_limit", 429)).toContain(
+      "drei Aktionen vorgemerkt",
+    );
+    expect(actionErrorLabel("turn_queue_full", 429)).toContain(
+      "Tischrunde ist gerade voll",
+    );
+  });
+});
+
+describe("parallel exploration input", () => {
+  it("keeps the composer available while Codex resolves another player", () => {
+    expect(
+      explorationInputDisabled({
+        busy: false,
+        dmThinking: true,
+        blockedByTurn: false,
+        sessionEnded: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("describes a queued action with its table position", () => {
+    expect(queuedActionMessage(2)).toBe(
+      "Aktion vorgemerkt · Position 2 in der Tischrunde",
+    );
+  });
+
+  it("removes the queued notice once the DM is no longer working", () => {
+    expect(shouldClearQueueNotice("Aktion vorgemerkt", false)).toBe(true);
+    expect(shouldClearQueueNotice("Aktion vorgemerkt", true)).toBe(false);
+    expect(shouldClearQueueNotice(null, false)).toBe(false);
+  });
+
+  it("provides a permanent accessible label for the freeform action", () => {
+    expect(ACTION_INPUT_LABEL).toBe("Aktion für den Codex-DM beschreiben");
   });
 });

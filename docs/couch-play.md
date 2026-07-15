@@ -1,47 +1,97 @@
-# Couch-Play mit Fernseher und vier Handys
+# Couch-Play mit Chromecast und vier Handys
 
-Plum Tabletop trennt den gemeinsamen Tisch vom persönlichen Companion:
+Plum Tabletop funktioniert zuhause wie eine kleine Koop-Konsole:
 
-- Der Fernseher zeigt Szene, Karte, Initiative und die gemeinsame Dramaturgie.
+- Firefox ist die Host-Konsole für TV, Spielerplätze, Journal und Stimmen.
+- Der Chromecast zeigt nur die gemeinsame, lesbare 16:9-Bühne.
 - Jedes Handy steuert genau eine Figur und sendet Aktionen oder Würfe.
-- Nur der Gemeinschaftstisch spielt standardmässig Stimmen ab.
+- Codex bleibt der gemeinsame DM; die Handys benötigen keinen Authelia-Login.
 
-## Session vorbereiten
+## Einmalige Einrichtung
 
-1. Lege in der Kampagne die gewünschten Spielerfiguren an. Vier Figuren sind
-   ein guter Standard, aber keine feste Grenze.
-2. Starte die Session und öffne den Gemeinschaftstisch.
-3. Wähle im Tisch-Header `Auf TV`. Plum zeigt passend zu deinem Gerät den
-   Chromecast-Ablauf. Am Computer überträgst du den aktuellen Tab über
-   `Chrome-Menü → Streamen, speichern und teilen → Streamen… → Tab streamen`;
-   unter Android spiegelst du den Bildschirm über die Google Home App.
-4. Aktiviere danach im Chromecast-Dialog `Vollbild starten`.
-5. Wähle `Spieler verbinden`. Für jede freie Figur erscheint ein eigener QR-Code.
-6. Jede Person scannt den QR-Code ihrer Figur. Das Handy verbindet sich ohne
-   Authelia-Login und bleibt an diese Figur gebunden.
+Der Dienst `cast-agent` läuft im Host-Netzwerk, damit er Google-Cast-Geräte per
+mDNS im Heimnetz findet. Next.js spricht mit ihm nur über den gemeinsamen
+Unix-Socket; es wird kein zusätzlicher TCP-Port geöffnet.
+
+```bash
+docker compose up -d --build cast-agent web
+docker compose ps cast-agent web
+```
+
+Falls das WLAN Multicast zwischen Docker-Host und Chromecast blockiert, trage
+eine oder mehrere feste Geräte-IP-Adressen in `.env` ein und starte den Agenten
+neu:
+
+```dotenv
+CHROMECAST_HOSTS=192.168.1.52,192.168.1.53
+```
+
+```bash
+docker compose up -d --force-recreate cast-agent
+```
+
+## Eine Runde starten
+
+1. Lege in der Kampagne die vier gewünschten Spielerfiguren an.
+2. Starte die Session und öffne die Host-Konsole in Firefox.
+3. Wähle `TV-Ausgabe`. Die Konsole listet die im Heimnetz gefundenen
+   Chromecasts auf.
+4. Wähle beim Wohnzimmer-TV `Auf diesem TV starten`. Der Server öffnet dort
+   automatisch eine signierte, nur lesbare Bühne; Tab-Spiegelung ist nicht
+   nötig.
+5. Wähle `Spieler`. Für jede Figur erscheint ein eigener QR-Code.
+6. Jede Person scannt den Code ihrer Figur. Nach der Zuweisung wird der Code
+   gesperrt, damit zwei Geräte nicht dieselbe Figur übernehmen.
+
+Wenn kein Chromecast erreichbar ist, öffnet `Dieses Gerät als Bildschirm` die
+Host-Ansicht im Vollbild. Das ist auch der einfachste Fallback für einen per HDMI
+angeschlossenen Fernseher.
 
 ## Während des Spiels
 
-- Aktionen und Würfe werden serverseitig angenommen und an alle Ansichten
-  gestreamt. Solange Codex einen Zug auswertet, sind weitere Aktionen gesperrt.
-- Der Handy-Composer steht oben im Aktionsbereich; Vorschläge und Schnellwürfel
-  sind optional darunter.
-- Bei einem Verbindungsabbruch verbindet sich der Companion automatisch neu und
-  lädt verpasste Ereignisse aus dem EventLog nach.
+- Der Fernseher zeigt Ort, Dialog, Auftakt, Karte und Kampfzustand ohne
+  Host-Schaltflächen. Stimmen werden dort automatisch abgespielt.
+- Die Handys zeigen Figur, aktuelle Szene, vorgeschlagene Aktionen, Composer und
+  Würfel. Die TV-Fläche bleibt dadurch frei.
+- Während Codex eine Aktion auswertet, können die anderen Personen ihre nächste
+  Aktion bereits vormerken. Der Server verarbeitet diese Exploration-Aktionen
+  in Eingangsreihenfolge. Im Kampf gilt weiterhin strikt die Initiative.
+- Bei einem Verbindungsabbruch verbindet sich jede Ansicht automatisch neu. Ein
+  aktueller Bühnen-Bootstrap wird auch nach langen Sessions mit vielen Events
+  erneut geliefert.
 
-## Handy ersetzen oder neu koppeln
+## Handy ersetzen oder Zugriff entziehen
 
-Öffne am Fernseher erneut `Spieler verbinden`, wähle bei der Figur
-`Neu koppeln` und bestätige. Der alte Handy-Zugang wird sofort ungültig und ein
-neuer QR-Code wird ausgestellt.
+Öffne `Spieler`, wähle bei der Figur `Zuweisung zurücksetzen` und bestätige. Der
+alte Handy-Zugang wird sofort ungültig und ein neuer QR-Code wird ausgestellt.
+`Zugewiesen` bedeutet bewusst nur, dass ein Gerät den Platz beansprucht hat; die
+App behauptet nicht, dass dieses Gerät gerade online ist.
 
-## Netzwerkhinweise
+## Netzwerk und Sicherheit
 
-- Chromecast, Tisch-Browser und Handys müssen die öffentliche `APP_DOMAIN`
-  erreichen können. Eine reine Docker-interne Adresse funktioniert für QR-Codes
-  nicht.
-- Die Invite-Route muss in Traefik eine höhere Priorität als die
-  Authelia-geschützte Standardroute besitzen.
-- Redis wird für sichere DM-Zug-Sperren und Live-Events benötigt. Fällt Redis
-  aus, nimmt die App keinen neuen Codex-Zug an, statt zwei DMs parallel laufen zu
-  lassen.
+- Chromecast, Host und Handys müssen die öffentliche HTTPS-`APP_DOMAIN`
+  erreichen können. Eine Docker-interne Adresse funktioniert weder im QR-Code
+  noch im Cast-WebView.
+- Die Traefik-Routen für `/play/invite/...` und `/display/sessions/...` umgehen
+  Authelia nur deshalb, weil sie eigene signierte Fähigkeiten prüfen. Die
+  normale Host-Konsole bleibt Authelia-geschützt.
+- Eine TV-Fähigkeit ist an genau eine Session gebunden, läuft nach 16 Stunden ab
+  und sieht nur den spielersicheren Event-Stream. Verdeckte Würfe und DM-interne
+  Ereignisse werden nicht an den Fernseher übertragen.
+- Redis schützt den einzelnen Codex-DM-Turn und hält die begrenzte Warteschlange
+  für gleichzeitige Exploration-Aktionen. Fällt Redis aus, lehnt die App neue
+  Aktionen kontrolliert ab, statt zwei DM-Läufe parallel zu starten.
+
+## Fehlerdiagnose
+
+```bash
+docker compose logs --tail=200 cast-agent
+docker compose restart cast-agent
+```
+
+| Anzeige                            | Prüfen                                                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Cast-Dienst ist nicht erreichbar` | Läuft `cast-agent`, ist der Socket-Volume gemountet, stimmen `INVITE_HMAC_SECRET` und `APP_DOMAIN`? |
+| Kein Gerät gefunden                | Gleiches LAN/VLAN, mDNS-Freigabe und optional `CHROMECAST_HOSTS` prüfen.                            |
+| TV öffnet die Seite nicht          | Der Chromecast muss `https://APP_DOMAIN/display/...` inklusive Zertifikat und DNS erreichen.        |
+| Spieler sieht Authelia             | Traefik-Priorität der Invite-Route muss über der Standardroute liegen.                              |

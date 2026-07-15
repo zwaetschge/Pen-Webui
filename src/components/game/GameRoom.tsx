@@ -34,13 +34,18 @@ export function GameRoom(props: {
   campaignId: string;
   sessionId: string;
   inviteToken?: string;
+  displayToken?: string;
   campaignTitle: string;
   campaignTheme: string;
   role: "host" | "player";
   localCharacters?: GameRoomCharacter[];
-  experience: "table" | "companion";
+  experience: "table" | "companion" | "display";
 }) {
-  useGameStream({ sessionId: props.sessionId, inviteToken: props.inviteToken });
+  useGameStream({
+    sessionId: props.sessionId,
+    inviteToken: props.inviteToken,
+    displayToken: props.displayToken,
+  });
 
   const combat = useGame((s) => s.combat);
   const gameOver = useGame((s) => s.gameOver);
@@ -50,6 +55,7 @@ export function GameRoom(props: {
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
   const [castGuideOpen, setCastGuideOpen] = useState(false);
+  const [castActive, setCastActive] = useState(false);
   const [companionSceneOpen, setCompanionSceneOpen] = useState(false);
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
   const voiceMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -57,11 +63,14 @@ export function GameRoom(props: {
   const castTriggerRef = useRef<HTMLButtonElement | null>(null);
   const roomRef = useRef<HTMLDivElement | null>(null);
   const isTable = props.experience === "table";
-  const ttsEnabled = isTtsExperienceEnabled(props.experience);
+  const isDisplay = props.experience === "display";
+  const isSharedScreen = isTable || isDisplay;
+  const ttsEnabled =
+    isTtsExperienceEnabled(props.experience) && !(isTable && castActive);
   const tactical = combat.active || forceTactical;
-  const showStage = isTable || combat.active || companionSceneOpen;
+  const showStage = isSharedScreen || combat.active || companionSceneOpen;
   const primaryCharacter = props.localCharacters?.[0] ?? null;
-  const roomHeight = isTable
+  const roomHeight = isSharedScreen
     ? "fixed inset-0 z-[60] h-dvh"
     : props.inviteToken
       ? "h-[100svh] lg:h-dvh"
@@ -86,120 +95,161 @@ export function GameRoom(props: {
     <TtsProvider
       sessionId={props.sessionId}
       inviteToken={props.inviteToken}
+      displayToken={props.displayToken}
       enabled={ttsEnabled}
+      defaultAutoplay={isDisplay}
     >
       <div
         ref={roomRef}
         className={cn(
           "tabletop-room relative flex min-h-0 flex-col",
+          isDisplay && "display-room",
           roomHeight,
         )}
       >
-        <header
-          className={cn(
-            "tabletop-header shrink-0 border-b border-brass-700/45 backdrop-blur",
-            isTable ? "px-5 py-3" : "px-3 py-2",
-          )}
-        >
-          <div className="mx-auto flex w-full max-w-[1760px] items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-display text-[10px] uppercase tracking-[0.26em] text-ink-100">
-                {isTable ? "Plum Tabletop · Gemeinschaftstisch" : "Companion"}
-              </p>
-              <h1 className="truncate font-display text-base uppercase tracking-[0.18em] text-brass-300 sm:tracking-[0.24em]">
-                {isTable
-                  ? props.campaignTitle
-                  : (primaryCharacter?.name ?? props.campaignTitle)}
-              </h1>
-              <p className="hidden truncate font-serif text-xs text-ink-200 sm:block">
-                {props.campaignTheme}
-              </p>
-            </div>
+        {isDisplay ? (
+          <DisplayHud campaignTitle={props.campaignTitle} />
+        ) : (
+          <header
+            className={cn(
+              "tabletop-header shrink-0 border-b border-brass-700/45 backdrop-blur",
+              isTable ? "px-4 py-3 lg:px-6" : "px-3 py-2",
+            )}
+          >
             {isTable ? (
-              <div className="flex items-center gap-2 xl:gap-3">
-                <button
-                  type="button"
-                  aria-haspopup="dialog"
-                  aria-expanded={pairingOpen}
-                  ref={pairingTriggerRef}
-                  onClick={() => setPairingOpen(true)}
-                  className="min-h-10 rounded-md border border-brass-400/65 bg-brass-700/35 px-4 py-1.5 text-sm text-parchment-100 shadow-brass hover:bg-brass-600/45"
+              <div className="mx-auto grid w-full max-w-[1760px] gap-3 xl:grid-cols-[minmax(16rem,1fr)_auto] xl:items-end">
+                <div className="flex min-w-0 items-center justify-between gap-4 xl:block">
+                  <div className="min-w-0">
+                    <p className="font-display text-[10px] uppercase tracking-[0.3em] text-brass-400">
+                      Host-Konsole · Session live
+                    </p>
+                    <h1 className="truncate font-display text-xl uppercase tracking-[0.12em] text-parchment-100 sm:text-2xl">
+                      {props.campaignTitle}
+                    </h1>
+                    <p className="hidden truncate font-serif text-xs text-ink-200 sm:block">
+                      {props.campaignTheme}
+                    </p>
+                  </div>
+                  <div className="xl:mt-2 xl:w-fit">
+                    <ConnectionBadge />
+                  </div>
+                </div>
+
+                <nav
+                  aria-label="Host-Konsole"
+                  className="console-command-rail flex min-w-0 items-stretch gap-2 overflow-x-auto pb-1 xl:justify-end"
                 >
-                  Spieler verbinden
-                </button>
-                <button
-                  type="button"
-                  aria-haspopup="dialog"
-                  aria-expanded={castGuideOpen}
-                  ref={castTriggerRef}
-                  onClick={() => setCastGuideOpen(true)}
-                  className="flex min-h-10 items-center gap-2 rounded-md border border-brass-400/75 bg-brass-700/35 px-3 py-1.5 text-sm text-parchment-100 shadow-brass transition hover:bg-brass-600/45"
-                >
-                  <CastGlyph className="size-5" />
-                  <span>Auf TV</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void enterDisplayMode()}
-                  className="hidden min-h-10 rounded-md border border-brass-700/50 bg-ink-600/70 px-3 py-1.5 text-sm text-brass-300 hover:border-brass-400/70 lg:block"
-                >
-                  Vollbild
-                </button>
-                <button
-                  type="button"
-                  aria-haspopup="dialog"
-                  aria-expanded={voiceMenuOpen}
-                  ref={voiceMenuTriggerRef}
-                  onClick={() => setVoiceMenuOpen((open) => !open)}
-                  className={cn(
-                    "hidden min-h-10 rounded-md border px-3 py-1.5 text-sm shadow-lg xl:block",
-                    voiceMenuOpen
-                      ? "border-brass-400/70 bg-brass-700/35 text-parchment-100"
-                      : "border-brass-700/50 bg-ink-600/70 text-brass-300 hover:border-brass-400/70",
-                  )}
-                >
-                  Stimmen
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTableOpen((open) => !open)}
-                  className={cn(
-                    "min-h-10 rounded-md border px-3 py-1.5 text-sm shadow-lg",
-                    tableOpen
-                      ? "border-brass-400/70 bg-brass-700/35 text-parchment-100"
-                      : "border-brass-700/50 bg-ink-600/70 text-brass-300 hover:border-brass-400/70",
-                  )}
-                >
-                  {tableOpen ? "Tisch" : "Journal"}
-                </button>
-                {!combat.active ? (
                   <button
                     type="button"
-                    onClick={() => setForceTactical((value) => !value)}
-                    className="min-h-10 rounded-md border border-brass-700/50 bg-ink-600/70 px-3 py-1.5 text-sm text-brass-300 shadow-lg hover:border-brass-400/70"
+                    aria-haspopup="dialog"
+                    aria-expanded={castGuideOpen}
+                    ref={castTriggerRef}
+                    onClick={() => setCastGuideOpen(true)}
+                    className={cn(
+                      "console-command console-command-primary group",
+                      castActive && "console-command-active",
+                    )}
                   >
-                    {tactical ? "Szene" : "Karte"}
+                    <CastGlyph className="size-6 shrink-0" />
+                    <span className="text-left">
+                      <strong>TV-Ausgabe</strong>
+                      <small>
+                        {castActive ? "Wohnzimmer aktiv" : "Verbinden"}
+                      </small>
+                    </span>
                   </button>
-                ) : null}
-                <ConnectionBadge />
+                  <button
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-expanded={pairingOpen}
+                    ref={pairingTriggerRef}
+                    onClick={() => setPairingOpen(true)}
+                    className="console-command console-command-primary group"
+                  >
+                    <PlayersGlyph className="size-6 shrink-0" />
+                    <span className="text-left">
+                      <strong>Spieler</strong>
+                      <small>QR-Lobby öffnen</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTableOpen((open) => !open)}
+                    className={cn(
+                      "console-command group",
+                      tableOpen && "console-command-active",
+                    )}
+                  >
+                    <JournalGlyph className="size-5 shrink-0" />
+                    <span className="text-left">
+                      <strong>Journal</strong>
+                      <small>{tableOpen ? "Geöffnet" : "Verlauf & Lage"}</small>
+                    </span>
+                  </button>
+                  {!combat.active ? (
+                    <button
+                      type="button"
+                      onClick={() => setForceTactical((value) => !value)}
+                      className={cn(
+                        "console-command console-command-compact group",
+                        forceTactical && "console-command-active",
+                      )}
+                    >
+                      <ViewGlyph className="size-5" />
+                      <span>{tactical ? "Szene" : "Karte"}</span>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-expanded={voiceMenuOpen}
+                    ref={voiceMenuTriggerRef}
+                    onClick={() => setVoiceMenuOpen((open) => !open)}
+                    className={cn(
+                      "console-command console-command-compact group",
+                      voiceMenuOpen && "console-command-active",
+                    )}
+                  >
+                    <VoiceGlyph className="size-5" />
+                    <span>Stimmen</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void enterDisplayMode()}
+                    className="console-command console-command-compact group"
+                  >
+                    <FullscreenGlyph className="size-5" />
+                    <span>Vollbild</span>
+                  </button>
+                </nav>
               </div>
             ) : (
-              <div className="flex shrink-0 items-center gap-2">
-                {!combat.active ? (
-                  <button
-                    type="button"
-                    aria-pressed={companionSceneOpen}
-                    onClick={() => setCompanionSceneOpen((open) => !open)}
-                    className="min-h-11 rounded-md border border-brass-700/50 bg-ink-600/70 px-3 py-2 text-xs text-brass-300"
-                  >
-                    {companionSceneOpen ? "Aktionen" : "Szene"}
-                  </button>
-                ) : null}
-                <ConnectionBadge />
+              <div className="mx-auto flex w-full max-w-[1760px] items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-display text-[9px] uppercase tracking-[0.28em] text-brass-400">
+                    Persönlicher Controller
+                  </p>
+                  <h1 className="truncate font-display text-lg uppercase tracking-[0.12em] text-parchment-100">
+                    {primaryCharacter?.name ?? props.campaignTitle}
+                  </h1>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {!combat.active ? (
+                    <button
+                      type="button"
+                      aria-pressed={companionSceneOpen}
+                      onClick={() => setCompanionSceneOpen((open) => !open)}
+                      className="min-h-11 rounded-md border border-brass-700/50 bg-ink-600/70 px-3 py-2 text-xs text-brass-300"
+                    >
+                      {companionSceneOpen ? "Controller" : "TV-Szene"}
+                    </button>
+                  ) : null}
+                  <ConnectionBadge />
+                </div>
               </div>
             )}
-          </div>
-        </header>
+          </header>
+        )}
 
         {isTable && voiceMenuOpen ? (
           <VoiceMenu
@@ -217,9 +267,11 @@ export function GameRoom(props: {
           <>
             <CastGuideDialog
               open={castGuideOpen}
+              sessionId={props.sessionId}
               triggerRef={castTriggerRef}
               onClose={() => setCastGuideOpen(false)}
               onEnterDisplayMode={enterDisplayMode}
+              onCastingChange={setCastActive}
             />
             <TablePairingDialog
               open={pairingOpen}
@@ -234,13 +286,18 @@ export function GameRoom(props: {
         <div
           className={cn(
             "tabletop-layout relative flex min-h-0 flex-1 flex-col overflow-hidden",
-            isTable ? "p-2 lg:p-3" : "p-1.5 sm:p-2",
+            isDisplay ? "p-0" : isTable ? "p-2 lg:p-3" : "p-1.5 sm:p-2",
           )}
         >
           <div className="mx-auto flex min-h-0 w-full max-w-[1760px] flex-1 flex-col gap-2">
             <div className="play-surface relative min-h-0 flex-1 overflow-hidden">
               {showStage ? (
-                <section className="tabletop-stage relative h-full min-h-[200px] overflow-hidden sm:min-h-[240px]">
+                <section
+                  className={cn(
+                    "tabletop-stage relative h-full min-h-[200px] overflow-hidden sm:min-h-[240px]",
+                    isDisplay && "display-stage",
+                  )}
+                >
                   <div className="tabletop-stage-surface h-full overflow-hidden">
                     {tactical ? (
                       <TacticalMap
@@ -248,11 +305,15 @@ export function GameRoom(props: {
                         inviteToken={props.inviteToken}
                         role={props.role}
                         localCharacters={props.localCharacters ?? []}
+                        readOnly={isDisplay}
                         selectedTokenId={selectedTokenId}
                         onSelectedTokenChange={setSelectedTokenId}
                       />
                     ) : (
-                      <CinematicView audioEnabled={ttsEnabled} />
+                      <CinematicView
+                        audioEnabled={ttsEnabled}
+                        displayMode={isDisplay}
+                      />
                     )}
                   </div>
                 </section>
@@ -308,7 +369,7 @@ export function GameRoom(props: {
               <DiceRollOverlay />
             </div>
 
-            {!isTable ? (
+            {!isSharedScreen ? (
               <ActionBar
                 sessionId={props.sessionId}
                 inviteToken={props.inviteToken}
@@ -322,10 +383,117 @@ export function GameRoom(props: {
           <IntroDirector
             sessionId={props.sessionId}
             enabled={showStage && !tactical}
+            displayMode={isDisplay}
           />
         </div>
       </div>
     </TtsProvider>
+  );
+}
+
+function DisplayHud({ campaignTitle }: { campaignTitle: string }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 px-[4vw] pt-[3vh]">
+      <div className="bg-ink-600/52 min-w-0 rounded-md border border-brass-700/30 px-4 py-2 shadow-2xl backdrop-blur-sm">
+        <p className="font-display text-[10px] uppercase tracking-[0.3em] text-brass-400">
+          Plum Tabletop
+        </p>
+        <p className="max-w-[52vw] truncate font-display text-lg uppercase tracking-[0.14em] text-parchment-100">
+          {campaignTitle}
+        </p>
+      </div>
+      <ConnectionBadge />
+    </div>
+  );
+}
+
+function PlayersGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.8 18.5c.6-3 2.3-4.5 5.2-4.5s4.6 1.5 5.2 4.5" />
+      <path d="M15 5.5a3 3 0 0 1 0 5.6M16.2 14c2.2.4 3.5 1.9 4 4.5" />
+    </svg>
+  );
+}
+
+function JournalGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4.5 4.5h11a3 3 0 0 1 3 3v12h-11a3 3 0 0 1-3-3z" />
+      <path d="M7.5 4.5v12a3 3 0 0 0 3 3M10 8h5M10 11.5h5" />
+    </svg>
+  );
+}
+
+function ViewGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 6.5 8.5 4l7 2.5L21 4v13.5L15.5 20l-7-2.5L3 20z" />
+      <path d="M8.5 4v13.5M15.5 6.5V20" />
+    </svg>
+  );
+}
+
+function VoiceGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="8.5" y="3" width="7" height="11" rx="3.5" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
+    </svg>
+  );
+}
+
+function FullscreenGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8.5 4H4v4.5M15.5 4H20v4.5M20 15.5V20h-4.5M8.5 20H4v-4.5" />
+    </svg>
   );
 }
 

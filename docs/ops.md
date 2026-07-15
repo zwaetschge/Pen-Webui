@@ -2,9 +2,29 @@
 
 ## Daily
 
-- `docker compose ps` — every service `running (healthy)` except `minio-init` which exits after first run.
+- `docker compose ps` — every long-running service is up; `cast-agent`,
+  `postgres` and `web` should report healthy, while `minio-init` exits after
+  first run.
 - `curl https://dnd.example.tld/api/health` — `{"status":"ok",...}` (Authelia-bypassed by Traefik label).
 - `docker compose logs --tail=200 web worker` — scan for unhandled errors.
+
+## Server-side Chromecast
+
+`cast-agent` uses the host network for mDNS discovery and exposes only a Unix
+socket in the `cast_runtime` volume. A failed Cast agent does not stop the game;
+the Host-Konsole reports it as unavailable and keeps the local fullscreen
+fallback usable.
+
+```bash
+docker compose ps cast-agent
+docker compose logs --tail=200 cast-agent
+docker compose restart cast-agent
+```
+
+For networks that block mDNS, set `CHROMECAST_HOSTS` to a comma-separated list
+of fixed device IPs. The public `APP_DOMAIN` must resolve from the Chromecast
+and present a trusted HTTPS certificate because the device loads the signed
+`/display/sessions/...` page itself.
 
 ## Schema migrations
 
@@ -121,6 +141,8 @@ The application does not run live Vocarium generation in CI.
 | ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `/dm` redirects to `/`                | Authelia not in front, or `Remote-User` header missing     | Verify `authelia@docker` middleware on the `dnd-web` router                          |
 | Guest invite shows Authelia login     | Routing priority on `dnd-web-invite` < `dnd-web`           | Ensure `priority=100` on the invite router                                           |
+| Firefox shows no Chromecast           | Cast agent down, mDNS blocked, or TV on another VLAN       | Check `cast-agent` logs; set `CHROMECAST_HOSTS` as an IP fallback                    |
+| Chromecast opens a blank/error page   | TV cannot resolve or reach the public `APP_DOMAIN`         | Verify LAN DNS, HTTPS certificate, and Traefik display route                         |
 | Assets stuck in `generating`          | Worker dead, Codex imagegen failed, or API fallback failed | `docker compose restart worker`; check worker logs and Codex login in `/dm/settings` |
 | `getSessionUser()` always null        | Authelia header name mismatch                              | Check `AUTHELIA_HEADER_USER` vs what Authelia sets                                   |
 | DM says "no OpenAI API key available" | Per-user key not set AND no env fallback                   | Open `/dm/settings` and paste a key, or set `OPENAI_API_KEY` in `.env`               |

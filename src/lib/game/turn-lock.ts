@@ -23,6 +23,25 @@ redis.call('SET', KEYS[2], fenceText)
 return {1, fenceText}
 `;
 
+const ACQUIRE_IF_QUEUE_EMPTY_SCRIPT = `
+if redis.call('LLEN', KEYS[3]) > 0 or redis.call('LLEN', KEYS[4]) > 0 then
+  return {-1, ''}
+end
+
+local acquired = redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2], 'NX')
+if not acquired then
+  return {0, ''}
+end
+
+local now = redis.call('TIME')
+local epochMicros = (tonumber(now[1]) * 1000000) + tonumber(now[2])
+local stored = tonumber(redis.call('GET', KEYS[2])) or 0
+local fence = math.max(stored + 1, epochMicros)
+local fenceText = string.format('%.0f', fence)
+redis.call('SET', KEYS[2], fenceText)
+return {1, fenceText}
+`;
+
 const RENEW_SCRIPT = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('PEXPIRE', KEYS[1], ARGV[2])
@@ -64,18 +83,43 @@ const leaseStates = new WeakMap<DmTurnLock, LeaseState>();
 export async function acquireDmTurnLock(
   sessionId: string,
 ): Promise<DmTurnLock | null> {
+  return acquireDmTurnLockWithPolicy(sessionId, false);
+}
+
+/**
+ * Admits a new foreground turn only when no older pending/processing turn
+ * exists. The queue check and lease acquisition happen in one Redis script,
+ * preventing a fresh household action from overtaking an older one.
+ */
+export async function acquireDmTurnLockIfQueueEmpty(
+  sessionId: string,
+): Promise<DmTurnLock | null> {
+  return acquireDmTurnLockWithPolicy(sessionId, true);
+}
+
+async function acquireDmTurnLockWithPolicy(
+  sessionId: string,
+  requireEmptyQueue: boolean,
+): Promise<DmTurnLock | null> {
   const token = randomUUID();
   const lockKey = dmTurnLockKey(sessionId);
   const fenceKey = dmTurnFenceKey(sessionId);
+  const keys = requireEmptyQueue
+    ? [
+        lockKey,
+        fenceKey,
+        `dm-turn:${sessionId}:pending`,
+        `dm-turn:${sessionId}:processing`,
+      ]
+    : [lockKey, fenceKey];
   const acquisitionStartedAt = Date.now();
   let acquisition: Promise<unknown>;
   try {
     acquisition = Promise.resolve(
       redis.eval(
-        ACQUIRE_SCRIPT,
-        2,
-        lockKey,
-        fenceKey,
+        requireEmptyQueue ? ACQUIRE_IF_QUEUE_EMPTY_SCRIPT : ACQUIRE_SCRIPT,
+        keys.length,
+        ...keys,
         token,
         String(DM_TURN_LOCK_TTL_MS),
       ),
@@ -89,10 +133,7 @@ export async function acquireDmTurnLock(
 
   let result: unknown;
   try {
-    result = await withTimeout(
-      acquisition,
-      DM_TURN_LOCK_ACQUIRE_TIMEOUT_MS,
-    );
+    result = await withTimeout(acquisition, DM_TURN_LOCK_ACQUIRE_TIMEOUT_MS);
   } catch {
     // A rejected/timed-out command may still have executed on Redis. Never run
     // the DM turn, and delete only our token once that command settles.
@@ -243,7 +284,7 @@ function parseAcquisition(result: unknown): number | null {
 }
 
 function isDefiniteMiss(result: unknown) {
-  return Array.isArray(result) && Number(result[0]) === 0;
+  return Array.isArray(result) && Number(result[0]) <= 0;
 }
 
 function dmTurnLockKey(sessionId: string) {

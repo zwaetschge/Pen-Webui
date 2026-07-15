@@ -3,32 +3,41 @@ import { normalizeOpeningBeats, openingBeatFromLegacy } from "./opening-beat";
 
 describe("opening beats", () => {
   it("preserves explicit titles separately from narration", () => {
-    expect(normalizeOpeningBeats([
-      { title: "Blicke im Diner", text: "Elinor mustert die Fremden." },
-    ])).toEqual([
+    expect(
+      normalizeOpeningBeats([
+        { title: "Blicke im Diner", text: "Elinor mustert die Fremden." },
+      ]),
+    ).toEqual([
       { title: "Blicke im Diner", text: "Elinor mustert die Fremden." },
     ]);
   });
 
   it("finds the acting NPC after an inverted location phrase", () => {
-    expect(openingBeatFromLegacy(
-      "Im Diner Zur Grauen Wolldecke mustert Elinor Hale die Fremden.",
-      0,
-    )).toMatchObject({ title: "Begegnung mit Elinor Hale" });
+    expect(
+      openingBeatFromLegacy(
+        "Im Diner Zur Grauen Wolldecke mustert Elinor Hale die Fremden.",
+        0,
+      ),
+    ).toMatchObject({ title: "Begegnung mit Elinor Hale" });
   });
 
-  it("uses a complete neutral title for unknown legacy prose", () => {
-    const beat = openingBeatFromLegacy(
-      "Hinter den regennassen Fenstern verändert sich etwas Unbestimmtes.",
-      2,
+  it("uses distinct complete titles for unknown legacy prose", () => {
+    const beats = [0, 1, 2].map((index) =>
+      openingBeatFromLegacy(
+        "Hinter den regennassen Fenstern verändert sich etwas Unbestimmtes.",
+        index,
+      ),
     );
-    expect(beat?.title).toBe("Ein neuer Moment");
-    expect(beat?.title).not.toContain("...");
+    expect(new Set(beats.map((beat) => beat?.title)).size).toBe(3);
+    expect(beats.every((beat) => !beat?.title.includes("..."))).toBe(true);
   });
 
   it("drops malformed and blank entries and respects the limit", () => {
-    expect(normalizeOpeningBeats([
-      "  ", { title: "", text: "x" }, "Eins.", "Zwei.",
-    ], 1)).toHaveLength(1);
+    expect(
+      normalizeOpeningBeats(
+        ["  ", { title: "", text: "x" }, "Eins.", "Zwei."],
+        1,
+      ),
+    ).toHaveLength(1);
   });
 });

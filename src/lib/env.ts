@@ -27,6 +27,7 @@ const schema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/i, "must be 32-byte hex (64 chars)"),
   INVITE_HMAC_SECRET: z.string().min(16),
+  CAST_AGENT_SOCKET: z.string().default("/run/plum-cast/agent.sock"),
 
   DM_LLM_PROVIDER: z.enum(["codex-cli", "openai-api"]).default("codex-cli"),
   CODEX_MODEL_DM: z

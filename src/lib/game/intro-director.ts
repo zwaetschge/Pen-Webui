@@ -25,37 +25,37 @@ export function buildIntroDirectorChapters({
     "Auftakt";
   const chapters: IntroDirectorChapter[] = [];
 
-  const establishingShot = clean(intro.establishingShot);
+  const establishingShot = playerFacingLegacyOpeningCopy(
+    intro.establishingShot,
+  );
   if (establishingShot) {
     chapters.push({
       id: "establishing",
       kind: "establishing",
-      label: "Totale",
+      label: "Ort",
       title: clean(scene.locationName) ?? sceneTitle,
       body: establishingShot,
-      meta: clean(intro.whyHere),
+      meta: playerFacingLegacyOpeningCopy(intro.whyHere),
       accent: "brass",
     });
   }
 
-  intro.setupBeats
-    .slice(0, 6)
-    .forEach((beat, index) => {
-      chapters.push({
-        id: `beat-${index + 1}`,
-        kind: "beat",
-        label: `Auftakt ${index + 1}`,
-        title: beat.title,
-        body: beat.text,
-        accent: index % 2 === 0 ? "arcane" : "brass",
-      });
+  intro.setupBeats.slice(0, 6).forEach((beat, index) => {
+    chapters.push({
+      id: `beat-${index + 1}`,
+      kind: "beat",
+      label: "Auftakt",
+      title: beat.title,
+      body: playerFacingLegacyOpeningCopy(beat.text) ?? beat.text,
+      accent: index % 2 === 0 ? "arcane" : "brass",
     });
+  });
 
   intro.characterIntros.forEach((character, index) => {
     const body =
-      clean(character.text) ??
-      clean(character.prompt) ??
-      clean(character.summary) ??
+      playerFacingLegacyOpeningCopy(character.text) ??
+      playerFacingLegacyOpeningCopy(character.prompt) ??
+      playerFacingLegacyOpeningCopy(character.summary) ??
       null;
     if (!body) return;
 
@@ -65,30 +65,62 @@ export function buildIntroDirectorChapters({
       label: "Auftritt",
       title: character.name,
       body,
-      meta: clean(character.summary),
+      meta: playerFacingLegacyOpeningCopy(character.summary),
       portraitUrl: clean(character.portraitUrl),
       accent: index % 2 === 0 ? "brass" : "arcane",
     });
   });
 
   const missionBody = [
-    clean(intro.stakes),
-    clean(intro.firstPrompt),
+    playerFacingLegacyOpeningCopy(intro.stakes),
+    playerFacingLegacyOpeningCopy(intro.firstPrompt),
   ].filter((line): line is string => Boolean(line));
-  const objective = clean(intro.objective);
+  const objective = playerFacingLegacyOpeningCopy(intro.objective);
   if (objective || missionBody.length > 0) {
     chapters.push({
       id: "mission",
       kind: "mission",
-      label: "Einsatz",
+      label: "Auftrag",
       title: objective ?? "Erste Entscheidung",
       body: missionBody.join("\n\n") || objective || "",
-      meta: clean(intro.whyHere),
+      meta: playerFacingLegacyOpeningCopy(intro.whyHere),
       accent: "blood",
     });
   }
 
   return chapters;
+}
+
+/**
+ * Older worldbuilds accidentally persisted prompt directions as player copy.
+ * Keep running sessions state-stable while turning those known directives
+ * into natural German at the presentation boundary.
+ */
+export function playerFacingLegacyOpeningCopy(
+  value: string | null | undefined,
+) {
+  let text = clean(value);
+  if (!text) return null;
+
+  text = text.replace(
+    /^(?:für den auftakt|regie|dm-anweisung|anweisung|kamera)\s*:\s*/iu,
+    "",
+  );
+  const describeAs = text.match(/^beschreibe\s+(.+?)\s+als\s+(.+)$/iu);
+  if (describeAs?.[1] && describeAs[2]) {
+    text = `${describeAs[1].trim()} zeigt sich als ${describeAs[2].trim()}`;
+  } else {
+    text = text.replace(/^(?:beschreibe|zeige)\s+/iu, "");
+    text = text.replace(/^der dm zeigt\s+/iu, "");
+  }
+
+  text = text.replace(
+    /,?\s*weil die gruppe soll\s*:?[ ]*([A-ZÄÖÜ])/giu,
+    (_match, first: string) => `. Die Gruppe soll ${first.toLowerCase()}`,
+  );
+  text = text.replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text[0]!.toUpperCase() + text.slice(1);
 }
 
 export function introDirectorStorageKey(

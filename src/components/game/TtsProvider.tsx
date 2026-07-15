@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ttsPostPath } from "./tts-paths";
+import { ttsPostPath, type TtsAccess } from "./tts-paths";
 
 type PlaybackStatus = "idle" | "loading" | "playing" | "error";
 
@@ -27,7 +27,9 @@ type TtsContextValue = {
 type TtsProviderProps = {
   sessionId: string;
   inviteToken?: string;
+  displayToken?: string;
   enabled?: boolean;
+  defaultAutoplay?: boolean;
   children: ReactNode;
 };
 
@@ -43,7 +45,9 @@ const AUTOPLAY_KEY = "plum.tts.autoplay.v1";
 export function TtsProvider({
   sessionId,
   inviteToken,
+  displayToken,
   enabled = true,
+  defaultAutoplay = false,
   children,
 }: TtsProviderProps) {
   const playbackRef = useRef<ActivePlayback | null>(null);
@@ -86,9 +90,17 @@ export function TtsProvider({
 
   useEffect(() => {
     setAutoplayState(
-      enabled && window.localStorage.getItem(AUTOPLAY_KEY) === "true",
+      enabled &&
+        (defaultAutoplay ||
+          window.localStorage.getItem(AUTOPLAY_KEY) === "true"),
     );
-  }, [enabled]);
+  }, [defaultAutoplay, enabled]);
+
+  const access = useMemo<TtsAccess | undefined>(() => {
+    if (displayToken) return { kind: "display", token: displayToken };
+    if (inviteToken) return { kind: "invite", token: inviteToken };
+    return undefined;
+  }, [displayToken, inviteToken]);
 
   useEffect(
     () => () => {
@@ -103,11 +115,14 @@ export function TtsProvider({
     [],
   );
 
-  const setAutoplay = useCallback((value: boolean) => {
-    if (!enabled) return;
-    setAutoplayState(value);
-    window.localStorage.setItem(AUTOPLAY_KEY, value ? "true" : "false");
-  }, [enabled]);
+  const setAutoplay = useCallback(
+    (value: boolean) => {
+      if (!enabled) return;
+      setAutoplayState(value);
+      window.localStorage.setItem(AUTOPLAY_KEY, value ? "true" : "false");
+    },
+    [enabled],
+  );
 
   const stop = useCallback(() => {
     requestIdRef.current += 1;
@@ -135,7 +150,7 @@ export function TtsProvider({
       setEventStatus(eventId, "loading");
 
       try {
-        const response = await fetch(ttsPostPath(sessionId, inviteToken), {
+        const response = await fetch(ttsPostPath(sessionId, access), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ eventId }),
@@ -143,10 +158,14 @@ export function TtsProvider({
         if (requestIdRef.current !== requestId) return;
         if (!response.ok) throw new Error("tts_failed");
 
-        const body = (await response.json().catch(() => null)) as
-          | { audioUrl?: unknown }
-          | null;
-        if (!body || typeof body.audioUrl !== "string" || body.audioUrl === "") {
+        const body = (await response.json().catch(() => null)) as {
+          audioUrl?: unknown;
+        } | null;
+        if (
+          !body ||
+          typeof body.audioUrl !== "string" ||
+          body.audioUrl === ""
+        ) {
           throw new Error("tts_failed");
         }
         if (requestIdRef.current !== requestId) return;
@@ -197,7 +216,14 @@ export function TtsProvider({
         setActiveEvent(null);
       }
     },
-    [disposePlayback, enabled, inviteToken, sessionId, setActiveEvent, setEventStatus],
+    [
+      access,
+      disposePlayback,
+      enabled,
+      sessionId,
+      setActiveEvent,
+      setEventStatus,
+    ],
   );
 
   const toggle = useCallback(
@@ -227,8 +253,10 @@ export function TtsProvider({
   return <TtsContext.Provider value={value}>{children}</TtsContext.Provider>;
 }
 
-export function isTtsExperienceEnabled(experience: "table" | "companion") {
-  return experience === "table";
+export function isTtsExperienceEnabled(
+  experience: "table" | "companion" | "display",
+) {
+  return experience === "table" || experience === "display";
 }
 
 export function useTtsPlayback() {

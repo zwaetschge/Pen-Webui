@@ -31,6 +31,9 @@ const mutationMock = vi.hoisted(() => ({
     async (_sessionId: string, fn: () => Promise<unknown>) => fn(),
   ),
 }));
+const pendingTurnWaker = vi.hoisted(() => ({
+  schedulePendingTurnDrain: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -74,6 +77,8 @@ vi.mock("./session-mutation", () => ({
   withSessionMutation: mutationMock.withSessionMutation,
 }));
 
+vi.mock("./pending-turn-waker", () => pendingTurnWaker);
+
 function request(body: unknown) {
   return new Request("http://localhost/api/sessions/sess_1/combat-action", {
     method: "POST",
@@ -98,6 +103,7 @@ describe("handleCombatAction", () => {
     tacticalMock.combatResourcesForTurn.mockReset();
     gridMock.movementGridForSession.mockReset();
     diceMock.rollDice.mockReset();
+    pendingTurnWaker.schedulePendingTurnDrain.mockReset();
     mutationMock.withSessionMutation.mockClear();
     mutationMock.withSessionMutation.mockImplementation(
       async (_sessionId: string, fn: () => Promise<unknown>) => fn(),
@@ -451,5 +457,8 @@ describe("handleCombatAction", () => {
         summary: "Game Over: Die Gruppe wurde im Kampf besiegt.",
       }),
     });
+    expect(pendingTurnWaker.schedulePendingTurnDrain).toHaveBeenCalledWith(
+      "sess_1",
+    );
   });
 });

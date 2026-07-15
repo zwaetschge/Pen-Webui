@@ -8,6 +8,7 @@ vi.mock("@/lib/redis", () => ({ redis: redisMock }));
 
 import {
   acquireDmTurnLock,
+  acquireDmTurnLockIfQueueEmpty,
   confirmDmTurnLockOwned,
   DM_TURN_LOCK_ACQUIRE_TIMEOUT_MS,
   DM_TURN_LOCK_RENEW_INTERVAL_MS,
@@ -42,6 +43,23 @@ describe("DM turn lease", () => {
     expect(fenceKey).toBe("dm-turn:session-1:fence");
 
     await releaseDmTurnLock(lock!);
+  });
+
+  it("atomically refuses a fresh turn while an older queue item exists", async () => {
+    redisMock.eval.mockResolvedValueOnce([-1, ""]);
+
+    await expect(
+      acquireDmTurnLockIfQueueEmpty("session-1"),
+    ).resolves.toBeNull();
+
+    const [script, keyCount, lockKey, fenceKey, pendingKey, processingKey] =
+      redisMock.eval.mock.calls[0]!;
+    expect(script).toContain("redis.call('LLEN', KEYS[3])");
+    expect(keyCount).toBe(4);
+    expect(lockKey).toBe("dm-turn:session-1:lock");
+    expect(fenceKey).toBe("dm-turn:session-1:fence");
+    expect(pendingKey).toBe("dm-turn:session-1:pending");
+    expect(processingKey).toBe("dm-turn:session-1:processing");
   });
 
   it("renews an owned lease and stops renewing after release", async () => {
@@ -190,8 +208,6 @@ describe("DM turn lease", () => {
     await Promise.resolve();
 
     expect(redisMock.eval).toHaveBeenCalledTimes(2);
-    expect(redisMock.eval.mock.calls[1]?.[2]).toBe(
-      "dm-turn:session-1:lock",
-    );
+    expect(redisMock.eval.mock.calls[1]?.[2]).toBe("dm-turn:session-1:lock");
   });
 });

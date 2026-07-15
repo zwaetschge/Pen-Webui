@@ -1,13 +1,7 @@
 "use client";
 
 import QRCode from "qrcode";
-import {
-  type RefObject,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { PairingSeat, PairingState } from "@/lib/game/pairing";
 
 type Props = {
@@ -17,6 +11,50 @@ type Props = {
   triggerRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 };
+
+export const PAIRING_POLL_INTERVAL_MS = 3_000;
+
+export function pairingSeatPresentation(status: PairingSeat["status"]) {
+  return status === "paired"
+    ? {
+        statusLabel: "Zugewiesen",
+        panelTitle: "Charakter zugewiesen",
+        panelBody:
+          "Dieser Zugriffscode wurde bereits einem Gerät zugewiesen. Ob es gerade online ist, wird nicht überwacht.",
+      }
+    : {
+        statusLabel: "Bereit zum Scannen",
+        panelTitle: "Code bereit",
+        panelBody: "Scanne den Code mit dem Handy dieses Spielers.",
+      };
+}
+
+export function startPairingPolling(
+  poll: () => Promise<void>,
+  intervalMs = PAIRING_POLL_INTERVAL_MS,
+) {
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const schedule = () => {
+    timer = setTimeout(() => void tick(), intervalMs);
+  };
+  const tick = async () => {
+    try {
+      await poll();
+    } catch {
+      // The caller owns user-facing error handling; polling must keep running.
+    } finally {
+      if (active) schedule();
+    }
+  };
+
+  schedule();
+  return () => {
+    active = false;
+    if (timer) clearTimeout(timer);
+  };
+}
 
 export function TablePairingDialog(props: Props) {
   const { open, sessionId, campaignTitle, triggerRef, onClose } = props;
@@ -28,6 +66,8 @@ export function TablePairingDialog(props: Props) {
   const [reissuing, setReissuing] = useState<string | null>(null);
   const [qrCodes, setQrCodes] = useState<Record<string, string>>({});
   const [qrFailures, setQrFailures] = useState<Record<string, true>>({});
+  const hasPairingState = state !== null;
+  const pollingEnabled = open && hasPairingState && reissuing === null;
 
   useEffect(() => {
     if (!open) return;
@@ -36,9 +76,15 @@ export function TablePairingDialog(props: Props) {
     setError(null);
 
     void requestPairing(sessionId, "POST", undefined, controller.signal)
-      .then((next) => setState(next as PairingState))
+      .then((next) => {
+        setState(next as PairingState);
+        setError(null);
+      })
       .catch((requestError: unknown) => {
-        if (requestError instanceof DOMException && requestError.name === "AbortError") {
+        if (
+          requestError instanceof DOMException &&
+          requestError.name === "AbortError"
+        ) {
           return;
         }
         setError(
@@ -53,6 +99,41 @@ export function TablePairingDialog(props: Props) {
 
     return () => controller.abort();
   }, [open, sessionId]);
+
+  useEffect(() => {
+    if (!pollingEnabled) return;
+    let controller: AbortController | null = null;
+    const stop = startPairingPolling(async () => {
+      controller = new AbortController();
+      try {
+        const next = await requestPairing(
+          sessionId,
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        setState(next as PairingState);
+        setError(null);
+      } catch (requestError) {
+        if (
+          requestError instanceof DOMException &&
+          requestError.name === "AbortError"
+        ) {
+          return;
+        }
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Die Spielerzuweisungen konnten nicht aktualisiert werden.",
+        );
+      }
+    });
+
+    return () => {
+      stop();
+      controller?.abort();
+    };
+  }, [pollingEnabled, sessionId]);
 
   const readySeats = useMemo(
     () => state?.seats.filter((seat) => seat.invitePath) ?? [],
@@ -150,7 +231,8 @@ export function TablePairingDialog(props: Props) {
       document.body.style.overflow = oldOverflow;
       for (const item of previous) {
         item.element.inert = item.inert;
-        if (item.ariaHidden === null) item.element.removeAttribute("aria-hidden");
+        if (item.ariaHidden === null)
+          item.element.removeAttribute("aria-hidden");
         else item.element.setAttribute("aria-hidden", item.ariaHidden);
       }
       trigger?.focus();
@@ -159,7 +241,7 @@ export function TablePairingDialog(props: Props) {
 
   async function reissue(seat: PairingSeat) {
     const confirmed = window.confirm(
-      `${seat.characterName} neu koppeln? Das bisher verbundene Gerät verliert sofort den Zugriff.`,
+      `Zuweisung für ${seat.characterName} zurücksetzen? Das bisher zugewiesene Gerät verliert sofort den Zugriff.`,
     );
     if (!confirmed) return;
     setReissuing(seat.characterId);
@@ -198,7 +280,7 @@ export function TablePairingDialog(props: Props) {
       aria-modal="true"
       aria-labelledby="pairing-title"
       tabIndex={-1}
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-ink-600/88 p-3 backdrop-blur-sm sm:p-6"
+      className="bg-ink-600/88 fixed inset-0 z-[100] flex items-center justify-center p-3 backdrop-blur-sm sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -242,7 +324,9 @@ export function TablePairingDialog(props: Props) {
 
           {loading ? (
             <div className="flex min-h-64 items-center justify-center">
-              <p className="font-serif text-ink-100">Spielercodes werden vorbereitet …</p>
+              <p className="font-serif text-ink-100">
+                Spielercodes werden vorbereitet …
+              </p>
             </div>
           ) : error && !state ? (
             <div className="border border-red-800/55 bg-red-950/25 p-5 text-sm text-red-100">
@@ -278,7 +362,10 @@ export function TablePairingDialog(props: Props) {
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <div className="relative">
-                    <p className="font-display text-lg uppercase tracking-[0.1em] text-parchment-100">
+                    <p
+                      title={seat.characterName}
+                      className={pairingSeatNameClassName()}
+                    >
                       {seat.characterName}
                     </p>
                     <p
@@ -288,17 +375,17 @@ export function TablePairingDialog(props: Props) {
                           : "mt-1 text-xs uppercase tracking-[0.18em] text-brass-400"
                       }
                     >
-                      {seat.status === "paired" ? "Verbunden" : "Bereit zum Scannen"}
+                      {pairingSeatPresentation(seat.status).statusLabel}
                     </p>
 
                     <div className="mt-4 flex aspect-square items-center justify-center border border-brass-700/35 bg-parchment-100 p-2">
                       {seat.status === "paired" ? (
                         <div className="px-3 text-center text-ink-600">
                           <p className="font-display text-xl uppercase tracking-[0.12em]">
-                            Platz aktiv
+                            {pairingSeatPresentation(seat.status).panelTitle}
                           </p>
                           <p className="mt-2 font-serif text-xs leading-5">
-                            Aktionen dieses Charakters kommen jetzt vom verbundenen Gerät.
+                            {pairingSeatPresentation(seat.status).panelBody}
                           </p>
                         </div>
                       ) : qrCodes[seat.characterId] ? (
@@ -310,7 +397,8 @@ export function TablePairingDialog(props: Props) {
                         />
                       ) : qrFailures[seat.characterId] ? (
                         <div className="px-3 text-center text-sm text-red-900">
-                          QR-Code konnte nicht erzeugt werden. Bitte neu koppeln.
+                          QR-Code konnte nicht erzeugt werden. Bitte neu
+                          koppeln.
                         </div>
                       ) : (
                         <div className="h-8 w-8 animate-spin rounded-full border-2 border-ink-200 border-t-ink-600 motion-reduce:animate-none" />
@@ -323,7 +411,9 @@ export function TablePairingDialog(props: Props) {
                       onClick={() => void reissue(seat)}
                       className="mt-4 min-h-11 w-full border border-brass-700/60 bg-brass-800/25 px-3 text-sm text-brass-300 transition hover:border-brass-400 hover:bg-brass-700/35 hover:text-parchment-100 disabled:cursor-wait disabled:opacity-60"
                     >
-                      {reissuing === seat.characterId ? "Wird erneuert …" : "Neu koppeln"}
+                      {reissuing === seat.characterId
+                        ? "Wird zurückgesetzt …"
+                        : "Zuweisung zurücksetzen"}
                     </button>
                   </div>
                 </article>
@@ -332,7 +422,10 @@ export function TablePairingDialog(props: Props) {
           )}
 
           {error && state ? (
-            <p role="alert" className="mt-5 border border-red-800/55 bg-red-950/25 p-3 text-sm text-red-100">
+            <p
+              role="alert"
+              className="mt-5 border border-red-800/55 bg-red-950/25 p-3 text-sm text-red-100"
+            >
               {error}
             </p>
           ) : null}
@@ -342,9 +435,13 @@ export function TablePairingDialog(props: Props) {
   );
 }
 
+export function pairingSeatNameClassName() {
+  return "truncate pr-12 font-display text-lg uppercase tracking-[0.1em] text-parchment-100";
+}
+
 async function requestPairing(
   sessionId: string,
-  method: "POST" | "DELETE",
+  method: "GET" | "POST" | "DELETE",
   body?: { characterId: string },
   signal?: AbortSignal,
 ): Promise<unknown> {

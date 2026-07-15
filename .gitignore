@@ -29,6 +29,8 @@ worktrees/
 coverage/
 playwright-report/
 test-results/
+__pycache__/
+*.py[cod]
 
 # prisma
 prisma/migrations/dev.db*

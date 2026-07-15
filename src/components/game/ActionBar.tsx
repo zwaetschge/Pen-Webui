@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, KeyboardEvent } from "react";
+import { useEffect, useRef, useState, KeyboardEvent } from "react";
 import { EMPTY_COMBAT_RESOURCES } from "@/lib/game/combat-resources";
 import { tokenMovement } from "@/lib/game/movement";
 import { useGame, type CombatState, type Token } from "@/lib/game/store";
@@ -54,13 +54,17 @@ export const COMBAT_ACTION_BUTTONS: Array<{
 
 const EMPTY_NEXT_ACTIONS: string[] = [];
 
+export const ACTION_INPUT_LABEL = "Aktion für den Codex-DM beschreiben";
+
 export function selectNextActions(state: {
   scene: { nextActions?: string[] };
 }) {
   return state.scene.nextActions ?? EMPTY_NEXT_ACTIONS;
 }
 
-export function selectActionCards(state: { scene: { nextActions?: string[] } }) {
+export function selectActionCards(state: {
+  scene: { nextActions?: string[] };
+}) {
   return selectNextActions(state)
     .slice(0, 3)
     .map((label, index) => ({
@@ -83,7 +87,7 @@ export function actionChoiceGridClassName(actionCount: number) {
 
 export function actionChoiceButtonClassName() {
   return cn(
-    "action-card action-card-play group relative flex w-full min-h-[4.75rem] items-start gap-3 overflow-hidden rounded-md border border-brass-700/50",
+    "action-card action-card-play group relative flex min-h-[4.75rem] w-full items-start gap-3 overflow-hidden rounded-md border border-brass-700/50",
     "bg-ink-600/70 px-3 py-3 text-left text-sm leading-snug text-parchment-100 shadow-lg transition",
     "whitespace-normal break-words hover:-translate-y-0.5 hover:border-brass-400/75 hover:bg-ink-500/80 hover:shadow-brass",
     "focus-visible:border-brass-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-400/35",
@@ -104,6 +108,7 @@ export function ActionBar(props: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queueNotice, setQueueNotice] = useState<string | null>(null);
   const awaiting = useGame((s) => s.awaitingSkillCheck);
   const dmThinking = useGame((s) => s.dmThinking);
   const combat = useGame((s) => s.combat);
@@ -111,6 +116,12 @@ export function ActionBar(props: Props) {
   const gameOver = useGame((s) => s.gameOver);
   const nextActions = useGame(selectNextActions);
   const actionCards = selectActionCards({ scene: { nextActions } });
+
+  useEffect(() => {
+    if (shouldClearQueueNotice(queueNotice, dmThinking)) {
+      setQueueNotice(null);
+    }
+  }, [dmThinking, queueNotice]);
 
   const selectedCharacter =
     localCharacters.find((c) => c.id === selectedCharacterId) ?? null;
@@ -124,7 +135,12 @@ export function ActionBar(props: Props) {
       characterName: selectedCharacter.name,
     }),
   );
-  const busyOrBlocked = busy || dmThinking || blockedByTurn || sessionEnded;
+  const busyOrBlocked = explorationInputDisabled({
+    busy,
+    dmThinking,
+    blockedByTurn,
+    sessionEnded,
+  });
   const activeTurnName = activeInitiativeName(
     combat.initiative,
     combat.turnIndex,
@@ -163,6 +179,7 @@ export function ActionBar(props: Props) {
     if (!text) return;
     setBusy(true);
     setError(null);
+    setQueueNotice(null);
     setDraft("");
     try {
       const response = await fetch(turnUrl, {
@@ -173,10 +190,19 @@ export function ActionBar(props: Props) {
           characterId: selectedCharacter?.id,
         }),
       });
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: unknown;
+        queued?: unknown;
+        position?: unknown;
+      };
       if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(
-          actionErrorLabel(body.error, response.status),
+        throw new Error(actionErrorLabel(body.error, response.status));
+      }
+      if (body.queued === true) {
+        setQueueNotice(
+          queuedActionMessage(
+            typeof body.position === "number" ? body.position : 1,
+          ),
         );
       }
     } catch (e) {
@@ -208,9 +234,7 @@ export function ActionBar(props: Props) {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(
-          actionErrorLabel(body.error, response.status),
-        );
+        throw new Error(actionErrorLabel(body.error, response.status));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Wurf fehlgeschlagen");
@@ -241,7 +265,7 @@ export function ActionBar(props: Props) {
   }
 
   return (
-    <div className="command-tray max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 bg-ink-500/84 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:px-4 lg:max-h-[36vh]">
+    <div className="command-tray bg-ink-500/84 max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:px-4 lg:max-h-[36vh]">
       {awaiting ? (
         <div className="table-note mb-3 border border-arcane-500/50 bg-arcane-600/15 px-3 py-2 text-sm">
           <p className="text-arcane-400">
@@ -265,13 +289,31 @@ export function ActionBar(props: Props) {
       ) : null}
 
       {dmThinking ? (
-        <div role="status" aria-live="polite" className="table-note mb-3 border border-brass-400/40 bg-brass-700/20 px-3 py-2 text-sm text-brass-300">
-          Der DM wertet die Szene aus...
+        <div
+          role="status"
+          aria-live="polite"
+          className="table-note mb-3 border border-brass-400/40 bg-brass-700/20 px-3 py-2 text-sm text-brass-300"
+        >
+          Der DM wertet eine Aktion aus. Deine nächste Aktion kannst du schon
+          vormerken.
+        </div>
+      ) : null}
+
+      {queueNotice ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="table-note mb-3 border border-emerald-500/35 bg-emerald-950/20 px-3 py-2 text-sm text-emerald-200"
+        >
+          {queueNotice}
         </div>
       ) : null}
 
       {blockedByTurn ? (
-        <div role="status" className="table-note mb-3 border border-brass-700/40 bg-ink-600/55 px-3 py-2 text-sm text-ink-100">
+        <div
+          role="status"
+          className="table-note mb-3 border border-brass-700/40 bg-ink-600/55 px-3 py-2 text-sm text-ink-100"
+        >
           Am Zug: {activeTurnName ?? "andere Figur"}
         </div>
       ) : null}
@@ -296,9 +338,41 @@ export function ActionBar(props: Props) {
         </label>
       ) : null}
 
+      {actionCards.length > 0 ? (
+        <div className="choice-dock bg-ink-600/42 mb-3 rounded-md border border-brass-700/45 p-2 shadow-[0_16px_40px_rgba(0,0,0,0.28)]">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="font-display text-[11px] uppercase tracking-[0.22em] text-brass-400">
+              Nächster Zug
+            </p>
+            <span className="hidden h-px flex-1 bg-gradient-to-r from-brass-700/50 to-transparent sm:block" />
+          </div>
+          <div className={actionChoiceGridClassName(actionCards.length)}>
+            {actionCards.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                disabled={busyOrBlocked}
+                aria-label={`Option ${action.shortcut}: ${action.label}`}
+                title={action.label}
+                onClick={() => chooseActionCard(action.label)}
+                className={actionChoiceButtonClassName()}
+              >
+                <span className="group-hover:text-brass-200 mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-brass-700/70 bg-ink-700/85 font-display text-[10px] text-brass-300 transition group-hover:border-brass-400/80">
+                  {action.shortcut}
+                </span>
+                <span className="min-w-0 flex-1 text-balance">
+                  {action.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="turn-composer mb-3 grid gap-2 rounded-md border border-brass-700/45 bg-ink-700/45 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
         <textarea
           ref={textareaRef}
+          aria-label={ACTION_INPUT_LABEL}
           rows={2}
           value={draft}
           disabled={busyOrBlocked}
@@ -324,41 +398,12 @@ export function ActionBar(props: Props) {
               : "border-brass-400/70 bg-brass-700/40 text-parchment-100 shadow-brass hover:bg-brass-600/45",
           )}
         >
-          {busy ? "Sendet" : dmThinking ? "DM denkt" : "Aktion senden"}
+          {busy ? "Sendet" : dmThinking ? "Vormerken" : "Aktion senden"}
         </button>
       </div>
       <p className="mb-3 text-xs text-ink-200">
         Enter sendet. Shift+Enter schreibt weiter.
       </p>
-
-      {actionCards.length > 0 ? (
-        <div className="choice-dock mb-3 rounded-md border border-brass-700/45 bg-ink-600/42 p-2 shadow-[0_16px_40px_rgba(0,0,0,0.28)]">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="font-display text-[11px] uppercase tracking-[0.22em] text-brass-400">
-              Nächster Zug
-            </p>
-            <span className="hidden h-px flex-1 bg-gradient-to-r from-brass-700/50 to-transparent sm:block" />
-          </div>
-          <div className={actionChoiceGridClassName(actionCards.length)}>
-            {actionCards.map((action) => (
-              <button
-                key={action.id}
-                type="button"
-                disabled={busyOrBlocked}
-                aria-label={`Option ${action.shortcut}: ${action.label}`}
-                title={action.label}
-                onClick={() => chooseActionCard(action.label)}
-                className={actionChoiceButtonClassName()}
-              >
-                <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-brass-700/70 bg-ink-700/85 font-display text-[10px] text-brass-300 transition group-hover:border-brass-400/80 group-hover:text-brass-200">
-                  {action.shortcut}
-                </span>
-                <span className="min-w-0 flex-1 text-balance">{action.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       <details className="dice-pocket mb-3 rounded-md border border-brass-700/35 bg-ink-600/35">
         <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 font-display text-[11px] uppercase tracking-[0.2em] text-brass-400">
@@ -481,7 +526,7 @@ function CombatActionPanel(props: {
   const lastAction = combat.lastAction;
 
   return (
-    <div className="command-tray max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 bg-ink-600/92 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
+    <div className="command-tray bg-ink-600/92 max-h-[52dvh] shrink-0 overflow-y-auto border-t border-brass-700/45 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="font-display text-[10px] uppercase tracking-[0.26em] text-brass-400">
@@ -702,6 +747,15 @@ export function actionErrorLabel(error: unknown, status: number) {
   if (error === "dm_busy") {
     return "Der DM verarbeitet gerade eine andere Aktion. Gleich erneut versuchen.";
   }
+  if (error === "turn_queue_actor_limit") {
+    return "Du hast bereits drei Aktionen vorgemerkt. Warte kurz, bis der DM eine davon übernimmt.";
+  }
+  if (error === "turn_queue_full") {
+    return "Die Tischrunde ist gerade voll. Warte kurz, bis der DM die nächste Aktion übernimmt.";
+  }
+  if (error === "turn_queue_unavailable") {
+    return "Die Aktionswarteschlange ist kurz nicht erreichbar. Bitte gleich erneut senden.";
+  }
   if (error === "target_out_of_range") return "Ziel außer Reichweite";
   if (error === "action_spent") return "Aktion verbraucht";
   if (error === "bonus_action_spent") return "Bonus verbraucht";
@@ -711,6 +765,27 @@ export function actionErrorLabel(error: unknown, status: number) {
   if (error === "target_not_found") return "Ziel nicht verfügbar";
   if (typeof error === "string" && error.trim()) return error;
   return `Aktion fehlgeschlagen (${status})`;
+}
+
+export function explorationInputDisabled(input: {
+  busy: boolean;
+  dmThinking: boolean;
+  blockedByTurn: boolean;
+  sessionEnded: boolean;
+}) {
+  return input.busy || input.blockedByTurn || input.sessionEnded;
+}
+
+export function queuedActionMessage(position: number) {
+  const safePosition = Math.max(1, Math.floor(position));
+  return `Aktion vorgemerkt · Position ${safePosition} in der Tischrunde`;
+}
+
+export function shouldClearQueueNotice(
+  queueNotice: string | null,
+  dmThinking: boolean,
+) {
+  return queueNotice !== null && !dmThinking;
 }
 
 function requestId() {

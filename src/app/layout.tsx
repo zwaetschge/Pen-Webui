@@ -38,7 +38,7 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="en"
+      lang="de"
       className={`${inter.variable} ${crimson.variable} ${cinzel.variable}`}
     >
       <body className="font-sans antialiased">
