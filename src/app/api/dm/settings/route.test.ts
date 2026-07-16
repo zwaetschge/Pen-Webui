@@ -15,6 +15,15 @@ const codexSettings = vi.hoisted(() => ({
   codexDmSettings: vi.fn(),
   setUserCodexDmSettings: vi.fn(),
 }));
+const codexModels = vi.hoisted(() => ({
+  codexModelCatalog: vi.fn(),
+  validateCodexModelSelection: vi.fn(
+    (value: string | null | undefined) => value?.trim() || null,
+  ),
+  validateCodexReasoningEffortSelection: vi.fn(
+    (_model: string, value: string | null | undefined) => value ?? null,
+  ),
+}));
 const codex = vi.hoisted(() => ({ codexLoginStatus: vi.fn() }));
 
 vi.mock("@/lib/auth", () => ({
@@ -26,6 +35,8 @@ vi.mock("@/lib/openai", () => fallback);
 
 vi.mock("@/lib/dm/codex-settings", () => codexSettings);
 
+vi.mock("@/lib/dm/codex-models", () => codexModels);
+
 vi.mock("@/lib/dm/llm", () => ({ codexLoginStatus: codex.codexLoginStatus }));
 
 vi.mock("@/lib/dm/terminal", () => ({
@@ -36,6 +47,7 @@ vi.mock("@/lib/env", () => ({
   env: () => ({
     DM_LLM_PROVIDER: "codex-cli",
     CODEX_MODEL_DM: "gpt-installation-default",
+    CODEX_REASONING_EFFORT_DM: "medium",
     ASSET_IMAGE_PROVIDER: "codex-cli",
   }),
 }));
@@ -57,6 +69,24 @@ const codexRuntime = {
   effectiveReasoningEffort: "high",
 };
 
+const codexCatalog = {
+  available: true,
+  detail: "Models reported by Codex.",
+  models: [
+    {
+      model: "gpt-5.5",
+      displayName: "GPT-5.5",
+      description: "Frontier model",
+      isDefault: true,
+      supportedReasoningEfforts: [
+        { reasoningEffort: "medium", description: "Balanced" },
+        { reasoningEffort: "high", description: "Deeper" },
+      ],
+      defaultReasoningEffort: "medium",
+    },
+  ],
+};
+
 function post(body: unknown) {
   return new Request("http://app/api/dm/settings", {
     method: "POST",
@@ -72,6 +102,13 @@ describe("DM settings route", () => {
     auth.requireDM.mockResolvedValue({ id: "dm-a" });
     fallback.openaiFallbackSettings.mockResolvedValue(fallbackState);
     codexSettings.codexDmSettings.mockResolvedValue(codexRuntime);
+    codexModels.codexModelCatalog.mockResolvedValue(codexCatalog);
+    codexModels.validateCodexModelSelection.mockImplementation(
+      (value: string | null | undefined) => value?.trim() || null,
+    );
+    codexModels.validateCodexReasoningEffortSelection.mockImplementation(
+      (_model: string, value: string | null | undefined) => value ?? null,
+    );
     codex.codexLoginStatus.mockResolvedValue({
       available: true,
       authenticated: true,
@@ -87,6 +124,7 @@ describe("DM settings route", () => {
 
     expect(response.status).toBe(200);
     expect(body.codexRuntime).toEqual(codexRuntime);
+    expect(body.codexModels).toEqual(codexCatalog);
     expect(body.llm.codexModel).toBe(codexRuntime.effectiveModel);
     expect(codexSettings.codexDmSettings).toHaveBeenCalledWith("dm-a");
   });
@@ -104,6 +142,10 @@ describe("DM settings route", () => {
       model: "gpt-5.5",
       reasoningEffort: "high",
     });
+    expect(codexModels.validateCodexModelSelection).toHaveBeenCalledWith(
+      "gpt-5.5",
+      codexCatalog,
+    );
     expect(codexSettings.codexDmSettings).toHaveBeenCalledWith("dm-a");
     expect(body.codexRuntime).toEqual(codexRuntime);
     expect(fallback.setUserOpenAIFallbackSettings).not.toHaveBeenCalled();
@@ -145,6 +187,60 @@ describe("DM settings route", () => {
     expect(codexSettings.setUserCodexDmSettings).not.toHaveBeenCalled();
     expect(fallback.setUserOpenAIFallbackSettings).not.toHaveBeenCalled();
     expect(fallback.clearUserOpenAIKey).not.toHaveBeenCalled();
+  });
+
+  it("rejects a model that is not exposed by the current Codex picker", async () => {
+    codexModels.validateCodexModelSelection.mockImplementationOnce(() => {
+      throw new Error("This model is not available in the Codex model picker.");
+    });
+    const { POST } = await import("./route");
+
+    const response = await POST(post({ codexModelDm: "gpt-made-up" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "This model is not available in the Codex model picker.",
+    });
+    expect(codexSettings.setUserCodexDmSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reasoning effort unsupported by the effective model", async () => {
+    codexModels.validateCodexReasoningEffortSelection.mockImplementationOnce(
+      () => {
+        throw new Error('GPT-5.5 does not support reasoning effort "minimal".');
+      },
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(post({ codexReasoningEffort: "minimal" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("does not support reasoning effort"),
+    });
+    expect(
+      codexModels.validateCodexReasoningEffortSelection,
+    ).toHaveBeenCalledWith("gpt-5.5", "minimal", codexCatalog);
+    expect(codexSettings.setUserCodexDmSettings).not.toHaveBeenCalled();
+  });
+
+  it("validates installation-default reasoning against the Codex default model", async () => {
+    codexModels.validateCodexReasoningEffortSelection.mockImplementationOnce(
+      () => {
+        throw new Error('GPT-5.5 does not support reasoning effort "minimal".');
+      },
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(
+      post({ codexModelDm: null, codexReasoningEffort: "minimal" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(
+      codexModels.validateCodexReasoningEffortSelection,
+    ).toHaveBeenCalledWith("gpt-installation-default", "minimal", codexCatalog);
+    expect(codexSettings.setUserCodexDmSettings).not.toHaveBeenCalled();
   });
 
   it("returns 401 on DM auth rejection without calling persistence", async () => {

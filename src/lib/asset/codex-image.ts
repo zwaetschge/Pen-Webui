@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { env } from "../env";
+import { resolveCodexExecutable } from "../dm/codex-cli";
 
 const MAX_PROCESS_OUTPUT_CHARS = 512_000;
 
@@ -22,7 +23,7 @@ export async function generateCodexImage(opts: {
 
   try {
     const result = await runProcess(
-      codexCommand(),
+      resolveCodexExecutable().command,
       [
         "exec",
         "--skip-git-repo-check",
@@ -114,15 +115,6 @@ function parseThreadId(stdout: string) {
     }
   }
   return null;
-}
-
-function codexCommand() {
-  const candidates = [
-    process.env.CODEX_BIN,
-    "/app/node_modules/.bin/codex",
-    path.join(process.cwd(), "node_modules/.bin/codex"),
-  ].filter(Boolean) as string[];
-  return candidates.find((candidate) => existsSync(candidate)) ?? "codex";
 }
 
 function codexHome() {

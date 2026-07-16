@@ -15,6 +15,7 @@ import { env } from "../env";
 import { logger } from "../logger";
 import { resolveOpenAIFallbackConfig } from "../openai";
 import { buildCodexExecArgs } from "./codex-args";
+import { resolveCodexExecutable } from "./codex-cli";
 import { codexDmSettings, type CodexDmSettings } from "./codex-settings";
 
 const MAX_PROCESS_OUTPUT_CHARS = 512_000;
@@ -83,7 +84,7 @@ export async function codexLoginStatus(): Promise<{
 }> {
   try {
     const result = await runProcess(
-      codexCommand(),
+      resolveCodexExecutable().command,
       ["login", "status"],
       "",
       10_000,
@@ -275,7 +276,7 @@ async function runCodexExec(opts: {
       await writeFile(schemaPath, JSON.stringify(opts.outputSchema), "utf8");
     }
     const result = await runProcess(
-      codexCommand(),
+      resolveCodexExecutable().command,
       buildCodexExecArgs({
         cwd: dir,
         schemaPath,
@@ -301,15 +302,6 @@ async function runCodexExec(opts: {
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
-}
-
-function codexCommand() {
-  const candidates = [
-    process.env.CODEX_BIN,
-    "/app/node_modules/.bin/codex",
-    path.join(process.cwd(), "node_modules/.bin/codex"),
-  ].filter(Boolean) as string[];
-  return candidates.find((candidate) => existsSync(candidate)) ?? "codex";
 }
 
 function codexEnv() {

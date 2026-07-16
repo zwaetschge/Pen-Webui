@@ -1,9 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useGameStream } from "@/lib/game/useGameStream";
 import { useGame } from "@/lib/game/store";
+import {
+  gameplayConsoleMode,
+  isHostConsoleAvailable,
+} from "@/lib/game/session-progression";
 import { cn } from "@/lib/cn";
 import { CinematicView } from "./CinematicView";
 import { ChatLog } from "./ChatLog";
@@ -56,6 +60,7 @@ export function GameRoom(props: {
   const [pairingOpen, setPairingOpen] = useState(false);
   const [castGuideOpen, setCastGuideOpen] = useState(false);
   const [castActive, setCastActive] = useState(false);
+  const [hostConsoleOpen, setHostConsoleOpen] = useState(false);
   const [companionSceneOpen, setCompanionSceneOpen] = useState(false);
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
   const voiceMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -65,6 +70,15 @@ export function GameRoom(props: {
   const isTable = props.experience === "table";
   const isDisplay = props.experience === "display";
   const isSharedScreen = isTable || isDisplay;
+  const consoleMode = gameplayConsoleMode({
+    experience: props.experience,
+    role: props.role,
+  });
+  const hostConsoleAvailable = isHostConsoleAvailable({
+    mode: consoleMode,
+    gameOver: Boolean(gameOver),
+    sessionEnded,
+  });
   const ttsEnabled =
     isTtsExperienceEnabled(props.experience) && !(isTable && castActive);
   const tactical = combat.active || forceTactical;
@@ -90,6 +104,12 @@ export function GameRoom(props: {
     }
     await Promise.allSettled(requests);
   }
+
+  const continueAfterIntro = useCallback(() => {
+    if (!hostConsoleAvailable) return;
+    setTableOpen(false);
+    setHostConsoleOpen(true);
+  }, [hostConsoleAvailable]);
 
   return (
     <TtsProvider
@@ -172,9 +192,34 @@ export function GameRoom(props: {
                       <small>QR-Lobby öffnen</small>
                     </span>
                   </button>
+                  {hostConsoleAvailable ? (
+                    <button
+                      type="button"
+                      aria-expanded={hostConsoleOpen}
+                      onClick={() => {
+                        setTableOpen(false);
+                        setHostConsoleOpen((open) => !open);
+                      }}
+                      className={cn(
+                        "console-command console-command-primary group",
+                        hostConsoleOpen && "console-command-active",
+                      )}
+                    >
+                      <DmGlyph className="size-6 shrink-0" />
+                      <span className="text-left">
+                        <strong>Codex-DM</strong>
+                        <small>
+                          {hostConsoleOpen ? "Konsole geöffnet" : "Spielzug"}
+                        </small>
+                      </span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => setTableOpen((open) => !open)}
+                    onClick={() => {
+                      setHostConsoleOpen(false);
+                      setTableOpen((open) => !open);
+                    }}
                     className={cn(
                       "console-command group",
                       tableOpen && "console-command-active",
@@ -367,9 +412,40 @@ export function GameRoom(props: {
 
               {gameOver || sessionEnded ? <GameOverOverlay /> : null}
               <DiceRollOverlay />
+
+              {hostConsoleAvailable && hostConsoleOpen ? (
+                <div className="bg-ink-700/98 absolute inset-x-2 bottom-2 z-[25] mx-auto max-w-5xl overflow-hidden rounded-md border border-brass-400/45 shadow-[0_-22px_70px_rgba(0,0,0,0.78)] lg:inset-x-6 lg:bottom-4">
+                  <div className="flex items-center justify-between gap-3 border-b border-brass-700/45 bg-ink-800/95 px-3 py-2 sm:px-4">
+                    <div>
+                      <p className="font-display text-[9px] uppercase tracking-[0.24em] text-brass-400">
+                        Spiel fortsetzen
+                      </p>
+                      <p className="text-xs text-ink-100">
+                        Aktion wählen oder direkt mit dem Codex-DM sprechen
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHostConsoleOpen(false)}
+                      className="min-h-10 rounded-md border border-brass-700/45 bg-ink-600/70 px-3 py-1.5 text-xs text-brass-300 hover:border-brass-400/70"
+                    >
+                      Schließen
+                    </button>
+                  </div>
+                  <GameplayConsole
+                    sessionId={props.sessionId}
+                    inviteToken={props.inviteToken}
+                    role={props.role}
+                    localCharacters={props.localCharacters ?? []}
+                    selectedTokenId={selectedTokenId}
+                    onSelectedTokenChange={setSelectedTokenId}
+                    className="max-h-[56dvh] border-t-0"
+                  />
+                </div>
+              ) : null}
             </div>
 
-            {!isSharedScreen ? (
+            {consoleMode === "inline" ? (
               <GameplayConsole
                 sessionId={props.sessionId}
                 inviteToken={props.inviteToken}
@@ -384,6 +460,7 @@ export function GameRoom(props: {
             sessionId={props.sessionId}
             enabled={showStage && !tactical}
             displayMode={isDisplay}
+            onComplete={continueAfterIntro}
           />
         </div>
       </div>
@@ -422,6 +499,24 @@ function PlayersGlyph({ className }: { className?: string }) {
       <circle cx="9" cy="8" r="3" />
       <path d="M3.8 18.5c.6-3 2.3-4.5 5.2-4.5s4.6 1.5 5.2 4.5" />
       <path d="M15 5.5a3 3 0 0 1 0 5.6M16.2 14c2.2.4 3.5 1.9 4 4.5" />
+    </svg>
+  );
+}
+
+function DmGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m12 3 7.5 4.5v9L12 21l-7.5-4.5v-9z" />
+      <path d="m8.5 9 2.5 3-2.5 3M13 15h3" />
     </svg>
   );
 }

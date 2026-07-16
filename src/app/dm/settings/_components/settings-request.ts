@@ -20,6 +20,26 @@ const codexRuntimeSchema = z.object({
   effectiveReasoningEffort: codexReasoningEffortSchema,
 });
 
+const codexModelsSchema = z.object({
+  available: z.boolean(),
+  detail: z.string(),
+  models: z.array(
+    z.object({
+      model: z.string(),
+      displayName: z.string(),
+      description: z.string(),
+      isDefault: z.boolean(),
+      supportedReasoningEfforts: z.array(
+        z.object({
+          reasoningEffort: codexReasoningEffortSchema,
+          description: z.string(),
+        }),
+      ),
+      defaultReasoningEffort: codexReasoningEffortSchema.nullable(),
+    }),
+  ),
+});
+
 const fallbackSchema = z.object({
   hasUserKey: z.boolean(),
   hasGlobalKey: z.boolean(),
@@ -47,6 +67,7 @@ const settingsStateSchema = z.object({
     detail: z.string(),
   }),
   codexRuntime: codexRuntimeSchema,
+  codexModels: codexModelsSchema,
   fallback: fallbackSchema,
   terminal: z.object({
     enabled: z.boolean(),
@@ -65,6 +86,34 @@ export type SettingsState = z.infer<typeof settingsStateSchema>;
 export type SettingsMutationResponse = z.infer<
   typeof settingsMutationResponseSchema
 >;
+
+export function codexEffortPickerState(settings: SettingsState): {
+  value: "" | SettingsState["codexRuntime"]["effectiveReasoningEffort"];
+  unsupported: SettingsState["codexRuntime"]["userReasoningEffort"];
+} {
+  const saved = settings.codexRuntime.userReasoningEffort;
+  if (!saved) return { value: "", unsupported: null };
+
+  const model =
+    (settings.codexRuntime.userModel
+      ? settings.codexModels.models.find(
+          (option) => option.model === settings.codexRuntime.userModel,
+        )
+      : null) ??
+    settings.codexModels.models.find((option) => option.isDefault) ??
+    settings.codexModels.models[0];
+  if (!model || model.supportedReasoningEfforts.length === 0) {
+    return { value: saved, unsupported: null };
+  }
+  if (
+    model.supportedReasoningEfforts.some(
+      (option) => option.reasoningEffort === saved,
+    )
+  ) {
+    return { value: saved, unsupported: null };
+  }
+  return { value: "", unsupported: saved };
+}
 
 type MutationRequestInit = RequestInit & { method: "POST" };
 

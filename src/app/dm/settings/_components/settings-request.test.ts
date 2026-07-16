@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSettingsRequestGate, requestSettings } from "./settings-request";
+import {
+  codexEffortPickerState,
+  createSettingsRequestGate,
+  requestSettings,
+  type SettingsState,
+} from "./settings-request";
 
 const validSettingsState = {
   hasOpenAIKey: false,
@@ -21,6 +26,23 @@ const validSettingsState = {
     effectiveModel: "gpt-5.5",
     effectiveReasoningEffort: "high",
   },
+  codexModels: {
+    available: true,
+    detail: "Models reported by Codex.",
+    models: [
+      {
+        model: "gpt-5.5",
+        displayName: "GPT-5.5",
+        description: "Frontier model",
+        isDefault: true,
+        supportedReasoningEfforts: [
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "high", description: "Deeper" },
+        ],
+        defaultReasoningEffort: "medium",
+      },
+    ],
+  },
   fallback: {
     hasUserKey: false,
     hasGlobalKey: true,
@@ -31,7 +53,7 @@ const validSettingsState = {
     configured: true,
   },
   terminal: { enabled: false, idleMinutes: 30 },
-};
+} satisfies SettingsState;
 
 const validMutationResponse = {
   ok: true,
@@ -126,5 +148,31 @@ describe("createSettingsRequestGate", () => {
     gate.release();
 
     expect(gate.acquire()).toBe(true);
+  });
+});
+
+describe("codexEffortPickerState", () => {
+  it("keeps a saved effort supported by the selected model", () => {
+    expect(
+      codexEffortPickerState({
+        ...validSettingsState,
+        codexRuntime: {
+          ...validSettingsState.codexRuntime,
+          userReasoningEffort: "high" as const,
+        },
+      }),
+    ).toEqual({ value: "high", unsupported: null });
+  });
+
+  it("resets a legacy saved effort missing from the current /model entry", () => {
+    expect(
+      codexEffortPickerState({
+        ...validSettingsState,
+        codexRuntime: {
+          ...validSettingsState.codexRuntime,
+          userReasoningEffort: "minimal" as const,
+        },
+      }),
+    ).toEqual({ value: "", unsupported: "minimal" });
   });
 });

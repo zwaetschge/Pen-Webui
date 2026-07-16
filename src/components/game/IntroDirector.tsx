@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   buildIntroDirectorChapters,
@@ -17,10 +17,12 @@ export function IntroDirector({
   sessionId,
   enabled,
   displayMode = false,
+  onComplete,
 }: {
   sessionId: string;
   enabled: boolean;
   displayMode?: boolean;
+  onComplete?: () => void;
 }) {
   const scene = useGame((s) => s.scene);
   const intro = scene.introSequence;
@@ -46,6 +48,12 @@ export function IntroDirector({
   const [visible, setVisible] = useState(false);
   const [played, setPlayed] = useState(false);
   const [chapterIndex, setChapterIndex] = useState(0);
+  const finish = useCallback(() => {
+    markPlayed(storageKey);
+    setPlayed(true);
+    setVisible(false);
+    onComplete?.();
+  }, [onComplete, storageKey]);
 
   useEffect(() => {
     if (!enabled) {
@@ -87,9 +95,7 @@ export function IntroDirector({
           setChapterIndex((index) => index + 1);
           return;
         }
-        markPlayed(storageKey);
-        setPlayed(true);
-        setVisible(false);
+        finish();
       },
       chapter?.kind === "character"
         ? CHARACTER_DURATION_MS
@@ -97,16 +103,14 @@ export function IntroDirector({
     );
 
     return () => window.clearTimeout(timeout);
-  }, [chapterIndex, chapters, displayMode, reducedMotion, storageKey, visible]);
+  }, [chapterIndex, chapters, displayMode, finish, reducedMotion, visible]);
 
   if (!enabled || !intro || chapters.length === 0) return null;
 
   const chapter = chapters[Math.min(chapterIndex, chapters.length - 1)];
 
   function close() {
-    markPlayed(storageKey);
-    setPlayed(true);
-    setVisible(false);
+    finish();
   }
 
   function replay() {
