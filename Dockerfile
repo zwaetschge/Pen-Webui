@@ -6,8 +6,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN apk add --no-cache libc6-compat openssl openssl-dev
 COPY package.json package-lock.json* ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --include=dev
+RUN npm ci --no-audit --no-fund --include=dev
 
 # ── builder stage ───────────────────────────────────────────────────
 FROM node:24-alpine AS builder
