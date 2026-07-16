@@ -1,6 +1,7 @@
 import { prisma } from "../db";
 import { BOOTSTRAP_EVENT_TYPES } from "../game/events";
 import type { WorldDigest, PersonaConfig } from "./prompts";
+import { normalizePartyState } from "../game/rules/party";
 
 const DIGEST_NPC_LIMIT = 40;
 
@@ -19,7 +20,14 @@ export async function buildDigest(
           theme: true,
           tone: true,
           systemPromptOverride: true,
-          world: { select: { worldFacts: true, threads: true, loreBible: true } },
+          world: {
+            select: {
+              worldFacts: true,
+              threads: true,
+              loreBible: true,
+              gameState: true,
+            },
+          },
         },
       }),
       prisma.scene.findFirst({
@@ -76,6 +84,8 @@ export async function buildDigest(
   const threads = Array.isArray(world?.threads)
     ? (world.threads as string[])
     : [];
+  const partyStateRaw = asRecord(world?.gameState).partyState;
+  const partyState = partyStateRaw ? normalizePartyState(partyStateRaw) : null;
 
   const locationDescription =
     stringOrNull(liveScenePayload.locationDescription) ??
@@ -155,6 +165,31 @@ export async function buildDigest(
         hp: hpCur != null && hpMax != null ? `${hpCur}/${hpMax}` : undefined,
       };
     }),
+    partyState: partyState
+      ? {
+          inventory: Object.values(partyState.inventory).map((item) => ({
+            name: item.name,
+            holderId: item.holderId,
+            quantity: item.quantity,
+          })),
+          activeQuests: Object.values(partyState.quests)
+            .filter((quest) => quest.status === "active")
+            .map((quest) => ({
+              id: quest.id,
+              title: quest.title,
+              objectives: quest.objectiveOrder.flatMap((id) => {
+                const objective = quest.objectives[id];
+                return objective
+                  ? [`${objective.title} (${objective.status}, ${objective.progress}/${objective.target})`]
+                  : [];
+              }),
+            })),
+          reputation: partyState.reputation,
+          activeDialogue: Object.values(partyState.dialogues).find(
+            (dialogue) => dialogue.status === "open",
+          )?.prompt,
+        }
+      : undefined,
     activeEncounter: activeEnc
       ? {
           id: activeEnc.id,

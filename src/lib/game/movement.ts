@@ -1,3 +1,9 @@
+import {
+  isCellBlocked,
+  movementCostAt,
+  normalizeTacticalGrid,
+} from "./rules/tactical";
+
 export const TACTICAL_MAP_COLUMNS = 16;
 export const TACTICAL_MAP_ROWS = 16;
 export const DEFAULT_TOKEN_MOVEMENT = 6;
@@ -37,6 +43,13 @@ export type MovementGrid = {
   columns?: number;
   rows?: number;
   blocked?: Array<{ x: number; y: number }>;
+  /** Rich tactical fields are preserved for server-side movement rules. */
+  elevations?: unknown[];
+  coverCells?: unknown[];
+  coverEdges?: unknown[];
+  terrain?: unknown[];
+  surfaces?: unknown[];
+  objects?: unknown[];
 };
 
 export function tileKey(tile: { x: number; y: number }): string {
@@ -82,7 +95,31 @@ export function normalizeMovementGrid(
     const unique = new Map(blocked.map((tile) => [tileKey(tile), tile]));
     grid.blocked = [...unique.values()].sort((a, b) => a.y - b.y || a.x - b.x);
   }
+  preserveArray(grid, "elevations", record.elevations ?? record.elevation);
+  preserveArray(grid, "coverCells", record.coverCells ?? record.cover);
+  preserveArray(grid, "coverEdges", record.coverEdges);
+  preserveArray(grid, "terrain", record.terrain ?? record.terrainCells);
+  preserveArray(grid, "surfaces", record.surfaces ?? record.surfaceCells);
+  preserveArray(
+    grid,
+    "objects",
+    record.objects ?? record.interactives ?? record.interactiveObjects,
+  );
   return Object.keys(grid).length > 0 ? grid : undefined;
+}
+
+function preserveArray(
+  grid: MovementGrid,
+  key:
+    | "elevations"
+    | "coverCells"
+    | "coverEdges"
+    | "terrain"
+    | "surfaces"
+    | "objects",
+  value: unknown,
+) {
+  if (Array.isArray(value)) grid[key] = value;
 }
 
 export function blockedTilesForGrid(grid: MovementGrid = {}): MovementTile[] {
@@ -103,9 +140,10 @@ export function movementRangeForToken(
 
   const occupiedDestinations = new Set<string>();
   const pathBlockers = new Set<string>();
-  const blockedTiles = new Set(
-    blockedTilesForGrid(grid).map((tile) => tileKey(tile)),
-  );
+  const tacticalGrid = normalizeTacticalGrid(grid, {
+    columns: grid.columns,
+    rows: grid.rows,
+  });
   for (const token of tokens) {
     if (token.id === selected.id) continue;
     const key = tileKey(token);
@@ -117,7 +155,6 @@ export function movementRangeForToken(
 
   const allowance = tokenMovement(selected);
   const startKey = tileKey(selected);
-  blockedTiles.delete(startKey);
   const seen = new Map<string, MovementTile>([
     [startKey, { x: selected.x, y: selected.y, cost: 0 }],
   ]);
@@ -130,11 +167,11 @@ export function movementRangeForToken(
         x: current.x + direction.x,
         y: current.y + direction.y,
       };
-      const nextCost = current.cost + 1;
+      const nextCost = current.cost + movementCostAt(tacticalGrid, next);
       const key = tileKey(next);
       if (nextCost > allowance) continue;
       if (!isInsideTacticalGrid(next, grid)) continue;
-      if (blockedTiles.has(key)) continue;
+      if (key !== startKey && isCellBlocked(tacticalGrid, next)) continue;
       if (pathBlockers.has(key)) continue;
 
       const previous = seen.get(key);
@@ -161,9 +198,7 @@ export function freeMovementTilesForToken(
 
   const columns = grid.columns ?? TACTICAL_MAP_COLUMNS;
   const rows = grid.rows ?? TACTICAL_MAP_ROWS;
-  const blockedTiles = new Set(
-    blockedTilesForGrid(grid).map((tile) => tileKey(tile)),
-  );
+  const tacticalGrid = normalizeTacticalGrid(grid, { columns, rows });
   const occupiedDestinations = new Set(
     tokens
       .filter((token) => token.id !== selected.id)
@@ -176,7 +211,9 @@ export function freeMovementTilesForToken(
     for (let x = 0; x < columns; x++) {
       const key = tileKey({ x, y });
       if (key === startKey) continue;
-      if (blockedTiles.has(key) || occupiedDestinations.has(key)) continue;
+      if (isCellBlocked(tacticalGrid, { x, y }) || occupiedDestinations.has(key)) {
+        continue;
+      }
       tiles.push({
         x,
         y,

@@ -96,6 +96,7 @@ model CampaignWorld {
   worldFacts Json     @default("[]")
   threads    Json     @default("[]") // active plot threads
   loreBible  Json     @default("{}")
+  gameState  Json     @default("{}") // versioned quests, decisions, reputation
   updatedAt  DateTime @updatedAt
 }
 
@@ -129,6 +130,7 @@ model Character {
   owner           User     @relation(fields: [ownerId], references: [id])
   name            String
   sheet           Json // D&D 5e character sheet JSON
+  runtime         Json     @default("{}") // versioned resources, inventory, equipment, death saves
   tokenAssetId    String?
   tokenAsset      Asset?   @relation("CharacterToken", fields: [tokenAssetId], references: [id])
   portraitAssetId String?
@@ -294,6 +296,7 @@ model Encounter {
   locationId String?
   round      Int             @default(0)
   activeTurn Int             @default(0)
+  runtime    Json            @default("{}") // plans, reactions, surfaces, objects, visibility, objectives
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
 
@@ -338,6 +341,7 @@ model GameSession {
   startedAt  DateTime        @default(now())
   endedAt    DateTime?
   summary    String?         @db.Text
+  runtime    Json            @default("{}") // votes, rest proposals, active cooperative decisions
   members    SessionMember[]
   events     EventLog[]
   ttsAudioCache TtsAudioCache[]

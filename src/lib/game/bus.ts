@@ -22,9 +22,15 @@ export type GameEvent = {
   type: string;
   payload: Record<string, unknown>;
   ts: number;
-  /** scope: dm — only the DM client sees it; player — everyone */
-  scope?: "all" | "dm";
+  /** Delivery scope. Character-scoped events never reach the shared display. */
+  scope?: GameEventScope;
 };
+
+export type GameEventScope =
+  | "all"
+  | "dm"
+  | "display"
+  | `character:${string}`;
 
 let pub: Redis | null = null;
 let pubConnection: Promise<void> | null = null;
@@ -57,7 +63,7 @@ export async function publishEvent(
   type: string,
   payload: Record<string, unknown>,
   opts: {
-    scope?: "all" | "dm";
+    scope?: GameEventScope;
     actorId?: string | null;
     eventId?: string;
   } = {},
@@ -65,7 +71,7 @@ export async function publishEvent(
   let row: { id: string; ts: Date };
   let eventType = type;
   let eventPayload = payload;
-  let eventScope: "all" | "dm" = opts.scope ?? "all";
+  let eventScope: GameEventScope = opts.scope ?? "all";
   try {
     row = await prisma.eventLog.create({
       data: {
@@ -88,7 +94,7 @@ export async function publishEvent(
     row = { id: existing.id, ts: existing.ts };
     eventType = existing.type;
     eventPayload = existing.payload as Record<string, unknown>;
-    eventScope = existing.scope === "dm" ? "dm" : "all";
+    eventScope = gameEventScope(existing.scope);
   }
   const ev: GameEvent = {
     id: row.id,
@@ -111,6 +117,18 @@ export async function publishEvent(
     });
   }
   return ev;
+}
+
+function gameEventScope(value: unknown): GameEventScope {
+  if (value === "dm" || value === "display") return value;
+  if (
+    typeof value === "string" &&
+    value.startsWith("character:") &&
+    value.length > "character:".length
+  ) {
+    return value as `character:${string}`;
+  }
+  return "all";
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -294,7 +312,7 @@ export async function recentEvents(
     type: r.type,
     payload: r.payload as Record<string, unknown>,
     ts: r.ts.getTime(),
-    scope: r.scope === "dm" ? "dm" : "all",
+    scope: gameEventScope(r.scope),
   }));
 }
 

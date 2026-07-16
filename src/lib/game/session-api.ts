@@ -119,6 +119,8 @@ export async function handleSessionStream(
     role: access.role,
     displayName: access.displayName,
     memberId: access.memberId,
+    characterId: access.role === "player" ? access.characterId : null,
+    display: false,
   });
 }
 
@@ -135,6 +137,8 @@ export async function handleReadonlySessionStream(
     role: "player",
     displayName: "TV-Ausgabe",
     memberId: "display",
+    characterId: null,
+    display: true,
   });
 }
 
@@ -145,6 +149,8 @@ async function streamSessionEvents(
     role: "host" | "player";
     displayName: string;
     memberId: string;
+    characterId: string | null;
+    display: boolean;
   },
 ) {
   const url = new URL(req.url);
@@ -215,7 +221,7 @@ async function streamSessionEvents(
           const oldest = forwardedIdOrder.shift();
           if (oldest) forwardedIds.delete(oldest);
         }
-        const visible = eventForClient(ev, viewer.role);
+        const visible = eventForClient(ev, viewer);
         if (visible)
           send({ id: visible.id, event: visible.type, data: visible });
       };

@@ -7,7 +7,7 @@ import { useGame } from "@/lib/game/store";
 import { cn } from "@/lib/cn";
 import { CinematicView } from "./CinematicView";
 import { ChatLog } from "./ChatLog";
-import { ActionBar } from "./ActionBar";
+import { GameplayConsole } from "./GameplayConsole";
 import { InitiativeTracker } from "./InitiativeTracker";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { SceneBrief } from "./SceneBrief";
@@ -370,7 +370,7 @@ export function GameRoom(props: {
             </div>
 
             {!isSharedScreen ? (
-              <ActionBar
+              <GameplayConsole
                 sessionId={props.sessionId}
                 inviteToken={props.inviteToken}
                 role={props.role}

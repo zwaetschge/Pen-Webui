@@ -18,6 +18,34 @@ function event(overrides: Partial<GameEvent>): GameEvent {
 }
 
 describe("eventForClient", () => {
+  it("routes private character information away from other players and the display", () => {
+    const clue = event({
+      type: "private_clue",
+      scope: "character:char_rogue",
+      payload: { text: "Du bemerkst eine Druckplatte." },
+    });
+
+    expect(
+      eventForClient(clue, {
+        role: "player",
+        characterId: "char_rogue",
+      }),
+    ).toBe(clue);
+    expect(
+      eventForClient(clue, {
+        role: "player",
+        characterId: "char_wizard",
+      }),
+    ).toBeNull();
+    expect(
+      eventForClient(clue, {
+        role: "player",
+        characterId: null,
+        display: true,
+      }),
+    ).toBeNull();
+    expect(eventForClient(clue, "host")).toBe(clue);
+  });
   it("exports the complete bootstrap event sequence through the current version", () => {
     expect(CURRENT_BOOTSTRAP_EVENT_TYPE).toBe("session_bootstrap_v13");
     expect(BOOTSTRAP_EVENT_TYPES).toEqual([

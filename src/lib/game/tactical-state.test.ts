@@ -41,6 +41,8 @@ describe("activeCombatTokensForSession", () => {
               y: 1,
               team: "player",
               movement: 6,
+              hp: 8,
+              maxHp: 10,
             },
           ],
         },
@@ -48,6 +50,18 @@ describe("activeCombatTokensForSession", () => {
       .mockResolvedValueOnce(null);
     db.findMany.mockResolvedValue([
       { type: "token_moved", payload: { tokenId: "hero", x: 2, y: 1 } },
+      {
+        type: "damage_applied",
+        payload: { targetId: "hero", amount: 6 },
+      },
+      {
+        type: "healing_applied",
+        payload: { targetId: "hero", amount: 4 },
+      },
+      {
+        type: "token_forced_moved",
+        payload: { tokenId: "hero", x: 4, y: 3 },
+      },
       { type: "token_moved", payload: { tokenId: "missing", x: 9, y: 9 } },
     ]);
 
@@ -55,10 +69,12 @@ describe("activeCombatTokensForSession", () => {
       {
         id: "hero",
         name: "Robert",
-        x: 2,
-        y: 1,
+        x: 4,
+        y: 3,
         team: "player",
         movement: 6,
+        hp: 6,
+        maxHp: 10,
       },
     ]);
 
@@ -67,7 +83,13 @@ describe("activeCombatTokensForSession", () => {
         where: {
           sessionId: "sess_1",
           type: {
-            in: ["token_moved", "damage_applied", "combat_action_used"],
+            in: [
+              "token_moved",
+              "token_forced_moved",
+              "damage_applied",
+              "healing_applied",
+              "combat_action_used",
+            ],
           },
           ts: { gte: startTs },
         },

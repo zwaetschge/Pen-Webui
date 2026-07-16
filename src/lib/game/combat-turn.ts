@@ -30,6 +30,24 @@ export function isActiveTurnForToken(input: {
   return entry ? initiativeEntryMatchesToken(entry, input.token) : false;
 }
 
+export function isTurnAvailableForToken(input: {
+  initiative: unknown;
+  turnIndex: number | null | undefined;
+  token: Pick<MovementToken, "id" | "name">;
+  turnGroup?: {
+    tokenIds: string[];
+    completedTokenIds: string[];
+  } | null;
+}): boolean {
+  if (input.turnGroup?.tokenIds.length) {
+    return (
+      input.turnGroup.tokenIds.includes(input.token.id) &&
+      !input.turnGroup.completedTokenIds.includes(input.token.id)
+    );
+  }
+  return isActiveTurnForToken(input);
+}
+
 export function isActiveTurnForCharacter(input: {
   initiative: unknown;
   turnIndex: number | null | undefined;
