@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   buildIntroDirectorChapters,
@@ -48,12 +48,29 @@ export function IntroDirector({
   const [visible, setVisible] = useState(false);
   const [played, setPlayed] = useState(false);
   const [chapterIndex, setChapterIndex] = useState(0);
+  const notifiedCompletionKeyRef = useRef<string | null>(null);
+  const notifyComplete = useCallback(
+    (key: string | null, wasPlayed: boolean) => {
+      if (
+        !shouldNotifyIntroComplete({
+          wasPlayed,
+          storageKey: key,
+          notifiedKey: notifiedCompletionKeyRef.current,
+        })
+      ) {
+        return;
+      }
+      notifiedCompletionKeyRef.current = key;
+      onComplete?.();
+    },
+    [onComplete],
+  );
   const finish = useCallback(() => {
     markPlayed(storageKey);
     setPlayed(true);
     setVisible(false);
-    onComplete?.();
-  }, [onComplete, storageKey]);
+    notifyComplete(storageKey, true);
+  }, [notifyComplete, storageKey]);
 
   useEffect(() => {
     if (!enabled) {
@@ -75,7 +92,14 @@ export function IntroDirector({
     setPlayed(wasPlayed);
     setVisible(!wasPlayed);
     setChapterIndex(0);
-  }, [activeKey, chapters.length, enabled, storageKey]);
+    notifyComplete(storageKey, wasPlayed);
+  }, [
+    activeKey,
+    chapters.length,
+    enabled,
+    notifyComplete,
+    storageKey,
+  ]);
 
   useEffect(() => {
     if (
@@ -278,6 +302,18 @@ export function shouldAutoAdvanceIntro(input: {
     input.visible &&
     input.chapterCount > 0 &&
     (!input.reducedMotion || input.displayMode)
+  );
+}
+
+export function shouldNotifyIntroComplete(input: {
+  wasPlayed: boolean;
+  storageKey: string | null;
+  notifiedKey: string | null;
+}) {
+  return (
+    input.wasPlayed &&
+    Boolean(input.storageKey) &&
+    input.notifiedKey !== input.storageKey
   );
 }
 

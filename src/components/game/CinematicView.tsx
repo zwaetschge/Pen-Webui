@@ -60,6 +60,7 @@ export function CinematicView({
         displayMode && "scene-stage-display",
       )}
     >
+      <div className={cinematicFallbackClassName(displayMode)} />
       <AnimatePresence>
         {scene.backgroundUrl ? (
           <motion.div
@@ -75,9 +76,7 @@ export function CinematicView({
               backgroundPosition: "center",
             }}
           />
-        ) : (
-          <div className={cinematicFallbackClassName(displayMode)} />
-        )}
+        ) : null}
       </AnimatePresence>
 
       <div className="absolute inset-0 bg-gradient-to-t from-ink-600 via-ink-600/40 to-transparent" />
