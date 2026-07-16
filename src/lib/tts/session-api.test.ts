@@ -11,6 +11,10 @@ const db = vi.hoisted(() => ({
 const accessMock = vi.hoisted(() => ({ resolveAccess: vi.fn() }));
 const inviteTokenMock = vi.hoisted(() => ({ parseToken: vi.fn() }));
 const vocariumMock = vi.hoisted(() => ({ synthesizeCloneSpeech: vi.fn() }));
+const displayCapabilityMock = vi.hoisted(() => ({
+  consumeDisplayTtsBudget: vi.fn(),
+  resolveActiveDisplayCapability: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -30,6 +34,14 @@ vi.mock("@/lib/game/access", () => ({
 
 vi.mock("@/lib/invite-token", () => ({
   parseToken: inviteTokenMock.parseToken,
+}));
+
+vi.mock("@/lib/cast/display-capability", () => displayCapabilityMock);
+
+vi.mock("@/lib/env", () => ({
+  env: () => ({
+    INVITE_HMAC_SECRET: "test-secret-with-at-least-sixteen-characters",
+  }),
 }));
 
 vi.mock("./vocarium-client", () => ({
@@ -55,6 +67,7 @@ describe("session TTS API", () => {
     accessMock.resolveAccess.mockReset();
     inviteTokenMock.parseToken.mockReset();
     vocariumMock.synthesizeCloneSpeech.mockReset();
+    Object.values(displayCapabilityMock).forEach((mock) => mock.mockReset());
   });
 
   it("returns cached audio without calling Vocarium", async () => {
@@ -413,18 +426,16 @@ describe("session TTS API", () => {
   });
 
   it("streams cached audio only for authorized session members", async () => {
-    accessMock.resolveAccess
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        role: "player",
-        sessionId: "sess_1",
-        campaignId: "camp_1",
-        userId: "player_1",
-        displayName: "Player",
-        memberId: "member_2",
-        characterId: "char_1",
-        inviteId: null,
-      });
+    accessMock.resolveAccess.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      role: "player",
+      sessionId: "sess_1",
+      campaignId: "camp_1",
+      userId: "player_1",
+      displayName: "Player",
+      memberId: "member_2",
+      characterId: "char_1",
+      inviteId: null,
+    });
     db.ttsAudioCacheFindFirst.mockResolvedValue({
       eventId: "ev_public",
       audio: Buffer.from([7, 8, 9]),
@@ -601,5 +612,167 @@ describe("session TTS API", () => {
     });
     expect(vocariumMock.synthesizeCloneSpeech).toHaveBeenCalledTimes(1);
     expect(db.ttsAudioCacheFindFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves cached display audio only while the receiver capability is active", async () => {
+    displayCapabilityMock.resolveActiveDisplayCapability.mockResolvedValue({
+      version: 2,
+      audience: "plum-display",
+      sessionId: "sess_1",
+      capabilityId: "capability-a",
+      expiryUnix: Math.floor(Date.now() / 1000) + 3600,
+    });
+    db.gameSessionFindUnique.mockResolvedValue({
+      id: "sess_1",
+      campaignId: "camp_1",
+      campaign: { host: { username: "zwaetschge" } },
+    });
+    db.eventLogFindFirst.mockResolvedValue({
+      id: "ev_1",
+      sessionId: "sess_1",
+      type: "narrate",
+      scope: "all",
+      ts: new Date(),
+      payload: { text: "Hallo.", speakerNpcId: null },
+    });
+    db.voiceAssignmentFindMany.mockResolvedValue([]);
+    db.ttsAudioCacheFindFirst.mockResolvedValue({
+      id: "cache_1",
+      status: "ready",
+      mimeType: "audio/wav",
+      byteLength: 12,
+      voiceId: "default",
+      error: null,
+    });
+
+    const { handleSessionTts } = await import("./session-api");
+    const response = await handleSessionTts(
+      post("ev_1"),
+      "sess_1",
+      null,
+      "display-token",
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      audioUrl: "/api/display/sessions/sess_1/tts/audio/cache_1/display-token",
+    });
+    expect(
+      displayCapabilityMock.consumeDisplayTtsBudget,
+    ).not.toHaveBeenCalled();
+    expect(vocariumMock.synthesizeCloneSpeech).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits display-triggered cache misses before calling Vocarium", async () => {
+    const claims = {
+      version: 2,
+      audience: "plum-display",
+      sessionId: "sess_1",
+      capabilityId: "capability-a",
+      expiryUnix: Math.floor(Date.now() / 1000) + 3600,
+    };
+    displayCapabilityMock.resolveActiveDisplayCapability.mockResolvedValue(
+      claims,
+    );
+    displayCapabilityMock.consumeDisplayTtsBudget.mockResolvedValue(false);
+    db.gameSessionFindUnique.mockResolvedValue({
+      id: "sess_1",
+      campaignId: "camp_1",
+      campaign: { host: { username: "zwaetschge" } },
+    });
+    db.eventLogFindFirst.mockResolvedValue({
+      id: "ev_1",
+      sessionId: "sess_1",
+      type: "narrate",
+      scope: "all",
+      ts: new Date(),
+      payload: { text: "Hallo.", speakerNpcId: null },
+    });
+    db.voiceAssignmentFindMany.mockResolvedValue([]);
+    db.ttsAudioCacheFindFirst.mockResolvedValue(null);
+
+    const { handleSessionTts } = await import("./session-api");
+    const response = await handleSessionTts(
+      post("ev_1"),
+      "sess_1",
+      null,
+      "display-token",
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(displayCapabilityMock.consumeDisplayTtsBudget).toHaveBeenCalledWith(
+      claims,
+    );
+    expect(vocariumMock.synthesizeCloneSpeech).not.toHaveBeenCalled();
+    expect(db.ttsAudioCacheCreate).not.toHaveBeenCalled();
+  });
+
+  it("coalesces concurrent synthesis for the same visible display event", async () => {
+    const claims = {
+      version: 2,
+      audience: "plum-display",
+      sessionId: "sess_1",
+      capabilityId: "capability-a",
+      expiryUnix: Math.floor(Date.now() / 1000) + 3600,
+    };
+    displayCapabilityMock.resolveActiveDisplayCapability.mockResolvedValue(
+      claims,
+    );
+    displayCapabilityMock.consumeDisplayTtsBudget.mockResolvedValue(true);
+    db.gameSessionFindUnique.mockResolvedValue({
+      id: "sess_1",
+      campaignId: "camp_1",
+      campaign: { host: { username: "zwaetschge" } },
+    });
+    db.eventLogFindFirst.mockResolvedValue({
+      id: "ev_1",
+      sessionId: "sess_1",
+      type: "narrate",
+      scope: "all",
+      ts: new Date(),
+      payload: { text: "Hallo.", speakerNpcId: null },
+    });
+    db.voiceAssignmentFindMany.mockResolvedValue([]);
+    db.ttsAudioCacheFindFirst.mockResolvedValue(null);
+    let releaseSpeech!: (value: { bytes: Buffer; mimeType: string }) => void;
+    vocariumMock.synthesizeCloneSpeech.mockReturnValue(
+      new Promise((resolve) => {
+        releaseSpeech = resolve;
+      }),
+    );
+    db.ttsAudioCacheCreate.mockResolvedValue({
+      id: "cache_shared",
+      status: "ready",
+      mimeType: "audio/wav",
+      byteLength: 3,
+      voiceId: "default",
+      error: null,
+    });
+
+    const { handleSessionTts } = await import("./session-api");
+    const first = handleSessionTts(
+      post("ev_1"),
+      "sess_1",
+      null,
+      "display-token",
+    );
+    const second = handleSessionTts(
+      post("ev_1"),
+      "sess_1",
+      null,
+      "display-token",
+    );
+    await vi.waitFor(() =>
+      expect(vocariumMock.synthesizeCloneSpeech).toHaveBeenCalledTimes(1),
+    );
+    releaseSpeech({ bytes: Buffer.from([1, 2, 3]), mimeType: "audio/wav" });
+
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(displayCapabilityMock.consumeDisplayTtsBudget).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(vocariumMock.synthesizeCloneSpeech).toHaveBeenCalledTimes(1);
   });
 });

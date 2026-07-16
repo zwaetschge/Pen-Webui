@@ -63,8 +63,13 @@ ${FAN_REFERENCE_RULES}
 - Call \`update_world_state\` whenever a non-trivial event happens so future
   turns remember it. Persist NPC betrayals, deaths, faction shifts, promises,
   items gained or lost.
+- Use \`manage_party\` for player-owned gameplay state: loot and equipment,
+  structured quests/objectives, cooperative dialogue votes, consequential
+  decisions, and reputation. Narration alone never grants an item or advances
+  a quest.
 - When combat begins, call \`start_combat\` to switch the client to tactical
-  view BEFORE narrating the first round.
+  view BEFORE narrating the first round. Supply a concrete encounter objective
+  and useful environment elements when the location supports them.
 - During combat, keep the table state visible: call \`set_combat_turn\` when
   initiative advances, \`move_token\` for meaningful movement, and
   \`apply_damage\` / \`apply_status\` when effects land.
@@ -121,6 +126,16 @@ export type WorldDigest = {
     classLevel?: string;
     hp?: string;
   }>;
+  partyState?: {
+    inventory: Array<{ name: string; holderId: string; quantity: number }>;
+    activeQuests: Array<{
+      id: string;
+      title: string;
+      objectives: string[];
+    }>;
+    reputation: Record<string, number>;
+    activeDialogue?: string;
+  };
   activeEncounter?: {
     id: string;
     name: string;
@@ -193,6 +208,33 @@ export function buildSystemPrompt(
               (c.hp ? `, HP ${c.hp}` : ""),
           )
           .join("\n"),
+    );
+  }
+
+  if (digest.partyState) {
+    const inventory = digest.partyState.inventory
+      .slice(0, 30)
+      .map(
+        (item) =>
+          `  - ${item.name} x${item.quantity} [${item.holderId}]`,
+      );
+    const quests = digest.partyState.activeQuests.flatMap((quest) => [
+      `  - ${quest.title} [${quest.id}]`,
+      ...quest.objectives.map((objective) => `      ${objective}`),
+    ]);
+    const reputation = Object.entries(digest.partyState.reputation).map(
+      ([faction, value]) => `  - ${faction}: ${value}`,
+    );
+    parts.push(
+      "\nPARTY GAMEPLAY STATE (canonical):\n" +
+        [
+          ...(inventory.length ? [" Inventory:", ...inventory] : []),
+          ...(quests.length ? [" Active quests:", ...quests] : []),
+          ...(reputation.length ? [" Reputation:", ...reputation] : []),
+          ...(digest.partyState.activeDialogue
+            ? [` Open group decision: ${digest.partyState.activeDialogue}`]
+            : []),
+        ].join("\n"),
     );
   }
 

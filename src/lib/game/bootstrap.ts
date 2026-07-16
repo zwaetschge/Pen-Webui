@@ -9,10 +9,27 @@ import {
   openingBeatFromLegacy,
   type OpeningBeat,
 } from "./opening-beat";
+import { acquireBootstrapLock, releaseBootstrapLock } from "./bootstrap-lock";
 
 type JsonRecord = Record<string, unknown>;
 
 export async function ensureSessionBootstrap(sessionId: string) {
+  const existing = await prisma.eventLog.findFirst({
+    where: { sessionId, type: CURRENT_BOOTSTRAP_EVENT_TYPE },
+    select: { id: true },
+  });
+  if (existing) return false;
+
+  const lock = await acquireBootstrapLock(sessionId);
+  if (!lock) return false;
+  try {
+    return await ensureSessionBootstrapLocked(sessionId);
+  } finally {
+    await releaseBootstrapLock(lock);
+  }
+}
+
+async function ensureSessionBootstrapLocked(sessionId: string) {
   const existing = await prisma.eventLog.findFirst({
     where: { sessionId, type: CURRENT_BOOTSTRAP_EVENT_TYPE },
     select: { id: true },
@@ -30,7 +47,8 @@ export async function ensureSessionBootstrap(sessionId: string) {
     select: { ts: true },
   });
   if (legacy) {
-    await archiveLegacyBootstrap(sessionId, legacy.ts);
+    const safeToMigrate = await archiveLegacyBootstrap(sessionId, legacy.ts);
+    if (!safeToMigrate) return false;
   }
 
   const session = await prisma.gameSession.findUnique({
@@ -65,6 +83,10 @@ export async function ensureSessionBootstrap(sessionId: string) {
   const locationName = localizeLocationName(location?.name ?? null);
   const locationDescription = localizeLocationDescription(
     location?.description ?? null,
+    locationName,
+  );
+  const sceneTitle = playerFacingSceneTitle(
+    opening?.title ?? null,
     locationName,
   );
   const presentNpcs = session.campaign.npcs
@@ -111,7 +133,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
   const brief = buildOpeningBrief({
     campaignTitle: session.campaign.title,
     theme: session.campaign.theme,
-    sceneTitle: opening?.title ?? "Auftakt",
+    sceneTitle,
     summary,
     hook,
     locationName,
@@ -125,7 +147,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
     introPlan,
   });
   const introSequence = buildIntroSequence({
-    sceneTitle: opening?.title ?? "Auftakt",
+    sceneTitle,
     introPlan,
     brief,
     locationName,
@@ -144,10 +166,10 @@ export async function ensureSessionBootstrap(sessionId: string) {
     }),
   });
   const bootstrapPayload = {
-    version: 12,
+    version: 13,
     campaignTitle: session.campaign.title,
     theme: session.campaign.theme,
-    sceneTitle: opening?.title ?? "Auftakt",
+    sceneTitle,
     summary,
     hook,
     objective: brief.objective,
@@ -170,11 +192,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
     introSequence,
   };
 
-  await publishEvent(
-    sessionId,
-    CURRENT_BOOTSTRAP_EVENT_TYPE,
-    bootstrapPayload,
-  );
+  await publishEvent(sessionId, CURRENT_BOOTSTRAP_EVENT_TYPE, bootstrapPayload);
 
   if (location) {
     await publishEvent(sessionId, "scene_set", {
@@ -192,7 +210,7 @@ export async function ensureSessionBootstrap(sessionId: string) {
       stakes: brief.stakes,
       nextActions: brief.nextActions,
       introSequence,
-      sceneTitle: opening?.title ?? "Auftakt",
+      sceneTitle,
       presentNpcs: bootstrapPayload.presentNpcs,
       characters,
     });
@@ -266,11 +284,11 @@ export function buildIntroSequence(input: {
     playerFacingNarrative(input.introPlan.stakes) ?? input.brief.stakes,
   );
   const firstPrompt =
-    playerFacingGerman(input.introPlan.firstPrompt) ??
+    playerFacingNarrative(input.introPlan.firstPrompt) ??
     fallbackFirstPrompt(characterIntros.map((intro) => intro.name));
 
   return {
-    title: input.sceneTitle,
+    title: playerFacingSceneTitle(input.sceneTitle, input.locationName),
     establishingShot,
     setupBeats,
     whyHere: input.brief.whyHere,
@@ -295,7 +313,7 @@ function buildSetupBeats(input: {
 }) {
   const planned = input.introPlan.setupBeats
     .flatMap((beat) => {
-      const title = playerFacingGerman(beat.title);
+      const title = playerFacingNarrative(beat.title);
       const text = playerFacingNarrative(beat.text);
       return title && text ? [{ title, text }] : [];
     })
@@ -304,7 +322,7 @@ function buildSetupBeats(input: {
         !input.characters?.length || !isGenericPartyArrivalBeat(beat.text),
     )
     .slice(0, 6);
-  if (planned.length >= 4) return planned;
+  if (planned.length >= 3) return planned;
 
   const npcNames = input.presentNpcNames.slice(0, 3);
   const fallback = [
@@ -319,7 +337,7 @@ function buildSetupBeats(input: {
       const normalized = openingBeatFromLegacy(beat, planned.length + index);
       return normalized ? [normalized] : [];
     });
-  return [...planned, ...fallback].slice(0, 6);
+  return [...planned, ...fallback.slice(0, 3 - planned.length)].slice(0, 6);
 }
 
 function isGenericPartyArrivalBeat(value: string) {
@@ -340,9 +358,9 @@ function buildCharacterIntro(character: CharacterIntroInput) {
     .join(" ");
   const visibleDetail = playerFacingNarrative(character.appearance);
   const summary = identity || "Mitglied der Gruppe";
-  const prompt = `${character.name}, beschreibe kurz, was die anderen zuerst an dir bemerken und wo du im Bild stehst.`;
+  const prompt = `${character.name}, beschreibe kurz, was die anderen zuerst an dir bemerken und wo du dich gerade befindest.`;
   const text = [
-    `${character.name}${identity ? `, ${identity},` : ""} bekommt einen eigenen Moment im Bild.`,
+    `${character.name}${identity ? `, ${identity},` : ""} wird für die Gruppe sichtbar.`,
     visibleDetail ? firstSentence(visibleDetail) : null,
     prompt,
   ]
@@ -377,9 +395,11 @@ function fallbackEstablishingShot(
   locationDescription: string | null,
 ) {
   const location = locationName
-    ? `Die Kamera findet euch ${locationPhrase(locationName)}.`
-    : "Die Kamera findet euch am Rand des ersten Schauplatzes.";
-  const description = locationDescription ? ` ${firstSentence(locationDescription)}` : "";
+    ? `Ihr befindet euch ${locationPhrase(locationName)}.`
+    : "Ihr steht am Rand des ersten Schauplatzes.";
+  const description = locationDescription
+    ? ` ${firstSentence(locationDescription)}`
+    : "";
   return `${location}${description}`.trim();
 }
 
@@ -510,9 +530,23 @@ function playerFacingNarrative(value: string | null) {
 }
 
 function looksLikeWritingDirection(value: string) {
-  return /^(?:bitte\s+)?(?:beschreibe|zeige|stelle|inszeniere|etabliere|schildere|führe|beginne|öffne|lass|nutze)\b/iu.test(
-    value.trim(),
-  );
+  const trimmed = value.trim();
+  const imperative =
+    /^(?:(?:(?:für\s+den|im|zum|der)\s+(?:auftakt|prolog|einstieg|opening)|regie|kamera|anweisung)\s*[:–—-]\s*)*(?:bitte\s+)?(?:beschreibe|zeige|stelle|inszeniere|etabliere|schildere|führe|beginne|öffne|lass|nutze)\b/iu;
+  const metaActor =
+    /^(?:(?:der|die)\s+)?(?:dm|spielleitung|erzähler(?:in)?)\s+(?:beschreibt|zeigt|stellt|inszeniert|etabliert|schildert|führt|beginnt|öffnet|lässt|nutzt)\b/iu;
+  return imperative.test(trimmed) || metaActor.test(trimmed);
+}
+
+function playerFacingSceneTitle(
+  value: string | null,
+  locationName: string | null,
+) {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed || /^opening$/iu.test(trimmed)) {
+    return locationName ?? "Auftakt";
+  }
+  return playerFacingNarrative(trimmed) ?? locationName ?? "Auftakt";
 }
 
 function localizeLocationName(value: string | null) {
@@ -590,17 +624,54 @@ function partyLabel(names: string[]) {
 }
 
 async function archiveLegacyBootstrap(sessionId: string, ts: Date) {
+  const latestSafeIntroTs = new Date(ts.getTime() + 15_000);
+  const firstGameplayEvent = await prisma.eventLog.findFirst({
+    where: {
+      sessionId,
+      type: {
+        in: [
+          "player_input",
+          "dice_roll",
+          "combat_started",
+          "combat_action_used",
+          "attack_resolved",
+          "combat_turn_set",
+          "combat_turn_ended",
+          "combat_ended",
+          "token_moved",
+          "damage_applied",
+          "status_applied",
+          "world_state_updated",
+          "party_defeated",
+          "game_over",
+          "session_ended",
+          "scene_ended",
+        ],
+      },
+      ts: { gt: ts },
+    },
+    orderBy: { ts: "asc" },
+    select: { ts: true },
+  });
+  // Never append an opening-state bootstrap to a running legacy session: as
+  // the newest replay event it would otherwise move every client back to act
+  // one. Existing sessions keep their old bootstrap; fresh/pre-play sessions
+  // migrate lazily on their next connection.
+  if (firstGameplayEvent) return false;
   await prisma.eventLog.updateMany({
     where: {
       sessionId,
       type: {
-        in: [...LEGACY_BOOTSTRAP_EVENT_TYPES, "scene_set", "narrate"],
+        in: [
+          ...LEGACY_BOOTSTRAP_EVENT_TYPES,
+          "scene_set",
+          "intro_sequence",
+          "narrate",
+        ],
       },
-      ts: {
-        gte: ts,
-        lte: new Date(ts.getTime() + 2_000),
-      },
+      ts: { gte: ts, lte: latestSafeIntroTs },
     },
     data: { type: "archived" },
   });
+  return true;
 }

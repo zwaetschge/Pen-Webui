@@ -196,6 +196,60 @@ export type AssetReady = {
   refId?: string;
 };
 
+export type GameplayState = {
+  partyRevision: number;
+  reaction: {
+    id: string;
+    reactorTokenId: string;
+    trigger: string;
+    options: string[];
+    expiresAt: number;
+  } | null;
+  plans: Record<
+    string,
+    {
+      abilityId: string;
+      targetTokenId?: string;
+      targetCell?: { x: number; y: number };
+    }
+  >;
+  turnGroup: {
+    tokenIds: string[];
+    completedTokenIds: string[];
+  } | null;
+  surfaces: Array<Record<string, unknown>>;
+  objects: Array<Record<string, unknown>>;
+  hiddenTokenIds: string[];
+  privateClues: Array<{ id: string; text: string; ts: number }>;
+  aiIntent: { tokenId: string; label: string; targetTokenId?: string } | null;
+  objectives: Array<{
+    id: string;
+    label: string;
+    progress: number;
+    target: number;
+    status: string;
+  }>;
+  rest: {
+    id: string;
+    kind: "short" | "long";
+    votes: Record<string, boolean>;
+    required: number;
+  } | null;
+  dialogue: {
+    id: string;
+    prompt: string;
+    options: Array<{ id: string; label: string }>;
+    votes: Record<string, string>;
+  } | null;
+  quests: Array<{
+    id: string;
+    title: string;
+    status: string;
+    objectives: Array<{ id: string; label: string; status: string }>;
+  }>;
+  reputation: Record<string, number>;
+};
+
 type GameState = {
   sessionId: string | null;
   role: "host" | "player" | null;
@@ -206,6 +260,7 @@ type GameState = {
   gameOver: GameOverState | null;
   sessionEnded: boolean;
   tokens: Record<string, Token>;
+  gameplay: GameplayState;
   awaitingSkillCheck: {
     characterId: string;
     skill: string;
@@ -250,6 +305,22 @@ const initial: GameState = {
   gameOver: null,
   sessionEnded: false,
   tokens: {},
+  gameplay: {
+    partyRevision: 0,
+    reaction: null,
+    plans: {},
+    turnGroup: null,
+    surfaces: [],
+    objects: [],
+    hiddenTokenIds: [],
+    privateClues: [],
+    aiIntent: null,
+    objectives: [],
+    rest: null,
+    dialogue: null,
+    quests: [],
+    reputation: {},
+  },
   awaitingSkillCheck: null,
   assetsReady: [],
   dmThinking: false,
@@ -270,6 +341,22 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
       gameOver: null,
       sessionEnded: false,
       tokens: {},
+      gameplay: {
+        partyRevision: 0,
+        reaction: null,
+        plans: {},
+        turnGroup: null,
+        surfaces: [],
+        objects: [],
+        hiddenTokenIds: [],
+        privateClues: [],
+        aiIntent: null,
+        objectives: [],
+        rest: null,
+        dialogue: null,
+        quests: [],
+        reputation: {},
+      },
       assetsReady: [],
       highestDmTurnFence: 0,
       seenEventIds: {},
@@ -285,12 +372,24 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
     if (dmTurnFence !== null) {
       const highestDmTurnFence = get().highestDmTurnFence;
       if (dmTurnFence < highestDmTurnFence) return;
-      if (dmTurnFence > highestDmTurnFence) set({ highestDmTurnFence: dmTurnFence });
+      if (dmTurnFence > highestDmTurnFence)
+        set({ highestDmTurnFence: dmTurnFence });
     }
 
     if (ev.id) {
       if (get().seenEventIds[ev.id]) return;
       set((s) => rememberEvent(s, ev.id));
+    }
+
+    const partyRevision = nonNegativeIntegerField(ev.payload.revision);
+    if (partyRevision !== undefined) {
+      set((s) =>
+        partyRevision > s.gameplay.partyRevision
+          ? {
+              gameplay: { ...s.gameplay, partyRevision },
+            }
+          : s,
+      );
     }
 
     if (isBootstrapEventType(ev.type)) {
@@ -457,6 +556,9 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
       }
       case "combat_started": {
         const tokens = (ev.payload.tokens as Token[] | undefined) ?? [];
+        const startedSurfaces = recordArrayField(ev.payload.surfaces);
+        const startedObjects = recordArrayField(ev.payload.objects);
+        const startedObjectives = objectiveListField(ev.payload.objectives);
         set((s) => ({
           combat: {
             active: true,
@@ -480,6 +582,16 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
           tokens: {
             ...s.tokens,
             ...Object.fromEntries(tokens.map((t) => [t.id, t])),
+          },
+          gameplay: {
+            ...s.gameplay,
+            surfaces: startedSurfaces,
+            objects: startedObjects,
+            objectives: startedObjectives,
+            reaction: null,
+            plans: {},
+            turnGroup: null,
+            aiIntent: null,
           },
         }));
         set((s) =>
@@ -542,6 +654,114 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
             },
           },
         }));
+        break;
+      }
+      case "action_planned": {
+        const tokenId = stringField(ev.payload.actorTokenId);
+        const abilityId = stringField(ev.payload.abilityId);
+        if (!tokenId || !abilityId) break;
+        const targetTokenId = stringField(ev.payload.targetTokenId);
+        const targetCell = gridCellField(ev.payload.targetCell);
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            plans: {
+              ...s.gameplay.plans,
+              [tokenId]: {
+                abilityId,
+                ...(targetTokenId ? { targetTokenId } : {}),
+                ...(targetCell ? { targetCell } : {}),
+              },
+            },
+          },
+        }));
+        break;
+      }
+      case "turn_group_set": {
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            turnGroup: {
+              tokenIds: stringList(ev.payload.tokenIds) ?? [],
+              completedTokenIds: stringList(ev.payload.completedTokenIds) ?? [],
+            },
+          },
+        }));
+        break;
+      }
+      case "turn_member_completed": {
+        const tokenId = stringField(ev.payload.tokenId);
+        if (!tokenId) break;
+        set((s) => {
+          const plans = { ...s.gameplay.plans };
+          delete plans[tokenId];
+          return {
+            gameplay: {
+              ...s.gameplay,
+              plans,
+              turnGroup: s.gameplay.turnGroup
+                ? {
+                    ...s.gameplay.turnGroup,
+                    completedTokenIds: [
+                      ...new Set([
+                        ...s.gameplay.turnGroup.completedTokenIds,
+                        tokenId,
+                      ]),
+                    ],
+                  }
+                : null,
+            },
+          };
+        });
+        break;
+      }
+      case "reaction_opened": {
+        const id = stringField(ev.payload.id);
+        const reactorTokenId = stringField(ev.payload.reactorTokenId);
+        if (!id || !reactorTokenId) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            reaction: {
+              id,
+              reactorTokenId,
+              trigger: stringField(ev.payload.trigger) ?? "attack",
+              options: stringList(ev.payload.options) ?? ["pass"],
+              expiresAt: Number(ev.payload.expiresAt ?? Date.now()),
+            },
+          },
+        }));
+        break;
+      }
+      case "reaction_resolved": {
+        set((s) => ({
+          gameplay: { ...s.gameplay, reaction: null },
+        }));
+        break;
+      }
+      case "ability_used":
+      case "resource_spent":
+      case "resource_restored":
+      case "concentration_changed": {
+        const label =
+          stringField(ev.payload.label) ??
+          stringField(ev.payload.abilityName) ??
+          stringField(ev.payload.resource) ??
+          "Fähigkeit";
+        set((s) =>
+          trimChat(
+            s.chat.concat({
+              kind: "system",
+              id: ev.id,
+              ts: ev.ts,
+              text:
+                ev.type === "concentration_changed"
+                  ? `Konzentration: ${label}`
+                  : `${String(ev.payload.actorName ?? "Figur")}: ${label}`,
+              tone: "info",
+            }),
+          ),
+        );
         break;
       }
       case "attack_resolved": {
@@ -850,6 +1070,54 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
         );
         break;
       }
+      case "healing_applied": {
+        const targetId = stringField(ev.payload.targetId);
+        const amount = Math.max(0, Number(ev.payload.amount ?? 0));
+        if (!targetId || !Number.isFinite(amount)) break;
+        set((s) => {
+          const token = s.tokens[targetId];
+          if (!token) return s;
+          return {
+            tokens: {
+              ...s.tokens,
+              [targetId]: {
+                ...token,
+                hp: Math.min(token.maxHp, token.hp + amount),
+              },
+            },
+          };
+        });
+        break;
+      }
+      case "character_stabilized":
+      case "character_revived": {
+        const tokenId =
+          stringField(ev.payload.tokenId) ??
+          stringField(ev.payload.characterId);
+        if (!tokenId) break;
+        set((s) => {
+          const token = s.tokens[tokenId];
+          if (!token) return s;
+          return {
+            tokens: {
+              ...s.tokens,
+              [tokenId]: {
+                ...token,
+                // Hit points are changed exclusively by healing_applied. A
+                // paired character_revived event only clears lifecycle state.
+                hp: token.hp,
+                statuses: (token.statuses ?? []).filter(
+                  (status) =>
+                    status.condition.toLowerCase() !== "dead" &&
+                    (ev.type !== "character_revived" ||
+                      status.condition.toLowerCase() !== "unconscious"),
+                ),
+              },
+            },
+          };
+        });
+        break;
+      }
       case "status_applied": {
         const targetId = String(ev.payload.targetId ?? "");
         const condition = String(ev.payload.condition ?? "").trim();
@@ -899,6 +1167,156 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
             }),
           ),
         );
+        break;
+      }
+      case "status_updated": {
+        const targetId =
+          stringField(ev.payload.targetId) ?? stringField(ev.payload.tokenId);
+        const condition =
+          stringField(ev.payload.condition) ?? stringField(ev.payload.status);
+        if (!targetId || !condition) break;
+        const active = ev.payload.active !== false;
+        set((s) => {
+          const token = s.tokens[targetId];
+          if (!token) return s;
+          const statuses = (token.statuses ?? []).filter(
+            (status) =>
+              status.condition.toLowerCase() !== condition.toLowerCase(),
+          );
+          return {
+            tokens: {
+              ...s.tokens,
+              [targetId]: {
+                ...token,
+                statuses: active
+                  ? [
+                      ...statuses,
+                      {
+                        condition,
+                        durationRounds: nonNegativeIntegerField(
+                          ev.payload.durationRounds,
+                        ),
+                      },
+                    ]
+                  : statuses,
+              },
+            },
+          };
+        });
+        break;
+      }
+      case "surface_changed": {
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            surfaces: Array.isArray(ev.payload.surfaces)
+              ? recordArrayField(ev.payload.surfaces)
+              : upsertSurfaceEntity(
+                  s.gameplay.surfaces,
+                  ev.payload.surface ?? ev.payload,
+                ),
+          },
+        }));
+        break;
+      }
+      case "object_changed": {
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            objects: upsertGameplayEntity(
+              s.gameplay.objects,
+              ev.payload.object ?? ev.payload,
+            ),
+          },
+        }));
+        break;
+      }
+      case "token_forced_moved": {
+        const tokenId = stringField(ev.payload.tokenId);
+        const x = Number(ev.payload.x);
+        const y = Number(ev.payload.y);
+        if (!tokenId || !Number.isInteger(x) || !Number.isInteger(y)) break;
+        set((s) => {
+          const token = s.tokens[tokenId];
+          return token
+            ? {
+                tokens: {
+                  ...s.tokens,
+                  [tokenId]: { ...token, x, y },
+                },
+              }
+            : s;
+        });
+        break;
+      }
+      case "stealth_changed": {
+        const tokenId = stringField(ev.payload.tokenId);
+        if (!tokenId) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            hiddenTokenIds:
+              ev.payload.hidden === false
+                ? s.gameplay.hiddenTokenIds.filter((id) => id !== tokenId)
+                : [...new Set([...s.gameplay.hiddenTokenIds, tokenId])],
+          },
+        }));
+        break;
+      }
+      case "token_revealed": {
+        const tokenId = stringField(ev.payload.tokenId);
+        if (!tokenId) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            hiddenTokenIds: s.gameplay.hiddenTokenIds.filter(
+              (id) => id !== tokenId,
+            ),
+          },
+        }));
+        break;
+      }
+      case "private_clue": {
+        const text = stringField(ev.payload.text);
+        if (!text) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            privateClues: [
+              ...s.gameplay.privateClues.slice(-19),
+              { id: ev.id, text, ts: ev.ts },
+            ],
+          },
+        }));
+        break;
+      }
+      case "ai_intent": {
+        const tokenId = stringField(ev.payload.tokenId);
+        const label = stringField(ev.payload.label);
+        if (!tokenId || !label) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            aiIntent: {
+              tokenId,
+              label,
+              ...(stringField(ev.payload.targetTokenId)
+                ? { targetTokenId: stringField(ev.payload.targetTokenId)! }
+                : {}),
+            },
+          },
+        }));
+        break;
+      }
+      case "encounter_objective_updated": {
+        const objective = objectiveFromPayload(ev.payload);
+        if (!objective) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            objectives: upsertById(s.gameplay.objectives, objective),
+          },
+        }));
         break;
       }
       case "asset_ready":
@@ -1077,6 +1495,104 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
               text: parts.length
                 ? `Weltzustand aktualisiert: ${parts.join(", ")}`
                 : "Weltzustand aktualisiert",
+              tone: "info",
+            }),
+          ),
+        );
+        break;
+      }
+      case "rest_proposed":
+      case "rest_vote_cast": {
+        const id = stringField(ev.payload.id);
+        const kind = ev.payload.kind === "long" ? "long" : "short";
+        if (!id) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            rest: {
+              id,
+              kind,
+              votes: booleanRecord(ev.payload.votes),
+              required: Math.max(1, Number(ev.payload.required ?? 1)),
+            },
+          },
+        }));
+        break;
+      }
+      case "rest_completed": {
+        set((s) => ({
+          gameplay: { ...s.gameplay, rest: null },
+        }));
+        break;
+      }
+      case "dialogue_opened":
+      case "dialogue_vote_cast": {
+        const id = stringField(ev.payload.id);
+        const prompt = stringField(ev.payload.prompt);
+        if (!id || !prompt) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            dialogue: {
+              id,
+              prompt,
+              options: dialogueOptions(ev.payload.options),
+              votes: stringRecord(ev.payload.votes),
+            },
+          },
+        }));
+        break;
+      }
+      case "dialogue_resolved": {
+        set((s) => ({
+          gameplay: { ...s.gameplay, dialogue: null },
+        }));
+        break;
+      }
+      case "quest_updated": {
+        const quest = questFromPayload(ev.payload);
+        if (!quest) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            quests: upsertById(s.gameplay.quests, quest),
+          },
+        }));
+        break;
+      }
+      case "reputation_changed": {
+        const factionId = stringField(ev.payload.factionId);
+        const value = Number(ev.payload.value);
+        if (!factionId || !Number.isFinite(value)) break;
+        set((s) => ({
+          gameplay: {
+            ...s.gameplay,
+            reputation: {
+              ...s.gameplay.reputation,
+              [factionId]: value,
+            },
+          },
+        }));
+        break;
+      }
+      case "inventory_changed":
+      case "equipment_changed":
+      case "decision_recorded": {
+        // Detailed private state is refreshed by the gameplay endpoint. The
+        // live event is still surfaced so the controller can invalidate it.
+        set((s) =>
+          trimChat(
+            s.chat.concat({
+              kind: "system",
+              id: ev.id,
+              ts: ev.ts,
+              text:
+                stringField(ev.payload.message) ??
+                (ev.type === "inventory_changed"
+                  ? "Inventar aktualisiert"
+                  : ev.type === "equipment_changed"
+                    ? "Ausrüstung aktualisiert"
+                    : "Entscheidung festgehalten"),
               tone: "info",
             }),
           ),
@@ -1295,6 +1811,145 @@ function stringArrayField(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function gridCellField(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const cell = value as Record<string, unknown>;
+  return Number.isInteger(cell.x) && Number.isInteger(cell.y)
+    ? { x: cell.x as number, y: cell.y as number }
+    : undefined;
+}
+
+function recordArrayField(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      )
+    : [];
+}
+
+function objectiveListField(value: unknown): GameplayState["objectives"] {
+  return recordArrayField(value).flatMap((objective) => {
+    const normalized = objectiveFromPayload(objective);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function upsertGameplayEntity(
+  current: Array<Record<string, unknown>>,
+  value: unknown,
+) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return current;
+  }
+  const entity = value as Record<string, unknown>;
+  const id = stringField(entity.id);
+  if (!id) return current;
+  if (entity.removed === true) return current.filter((item) => item.id !== id);
+  return [...current.filter((item) => item.id !== id), { ...entity, id }];
+}
+
+function upsertSurfaceEntity(
+  current: Array<Record<string, unknown>>,
+  value: unknown,
+) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return current;
+  }
+  const surface = value as Record<string, unknown>;
+  const x = Number(surface.x);
+  const y = Number(surface.y);
+  if (!Number.isInteger(x) || !Number.isInteger(y)) return current;
+  const withoutCell = current.filter(
+    (candidate) => Number(candidate.x) !== x || Number(candidate.y) !== y,
+  );
+  return surface.removed === true ? withoutCell : [...withoutCell, surface];
+}
+
+function upsertById<T extends { id: string }>(current: T[], value: T) {
+  return [...current.filter((item) => item.id !== value.id), value];
+}
+
+function objectiveFromPayload(
+  payload: Record<string, unknown>,
+): GameplayState["objectives"][number] | null {
+  const id = stringField(payload.id);
+  const label = stringField(payload.label);
+  if (!id || !label) return null;
+  return {
+    id,
+    label,
+    progress: Math.max(0, Number(payload.progress ?? 0)),
+    target: Math.max(1, Number(payload.target ?? 1)),
+    status: stringField(payload.status) ?? "active",
+  };
+}
+
+function booleanRecord(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      entry === true,
+    ]),
+  );
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) =>
+      typeof entry === "string" && entry.trim() ? [[key, entry.trim()]] : [],
+    ),
+  );
+}
+
+function dialogueOptions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const option = entry as Record<string, unknown>;
+    const id = stringField(option.id);
+    const label = stringField(option.label);
+    return id && label ? [{ id, label }] : [];
+  });
+}
+
+function questFromPayload(
+  payload: Record<string, unknown>,
+): GameplayState["quests"][number] | null {
+  const id = stringField(payload.id);
+  const title = stringField(payload.title);
+  if (!id || !title) return null;
+  const objectives = Array.isArray(payload.objectives)
+    ? payload.objectives.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return [];
+        }
+        const objective = entry as Record<string, unknown>;
+        const objectiveId = stringField(objective.id);
+        const label = stringField(objective.label);
+        return objectiveId && label
+          ? [
+              {
+                id: objectiveId,
+                label,
+                status: stringField(objective.status) ?? "active",
+              },
+            ]
+          : [];
+      })
+    : [];
+  return {
+    id,
+    title,
+    status: stringField(payload.status) ?? "active",
+    objectives,
+  };
 }
 
 function npcList(value: unknown): SceneState["presentNpcs"] | undefined {

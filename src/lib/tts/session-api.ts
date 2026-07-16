@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  consumeDisplayTtsBudget,
+  resolveActiveDisplayCapability,
+} from "@/lib/cast/display-capability";
+import type { DisplayTokenClaims } from "@/lib/cast/display-token";
 import { prisma } from "@/lib/db";
+import { env } from "@/lib/env";
 import { resolveAccess } from "@/lib/game/access";
 import { eventForClient } from "@/lib/game/events";
 import { parseToken } from "@/lib/invite-token";
@@ -23,13 +29,46 @@ type CachedRow = {
   error: string | null;
 };
 
+type PublicTtsAccess =
+  | { kind: "invite"; token: string }
+  | { kind: "display"; token: string }
+  | null;
+
+type ResolvedTtsAccess = {
+  role: "host" | "player";
+  displayCapability?: DisplayTokenClaims;
+};
+
+type SynthesizedAudio = Awaited<ReturnType<typeof synthesizeCloneSpeech>>;
+const ttsSynthesisInFlight = new Map<string, Promise<SynthesizedAudio>>();
+
+class DisplayTtsAdmissionError extends Error {
+  constructor(
+    public readonly code:
+      | "display_tts_unavailable"
+      | "display_tts_rate_limited",
+    public readonly status: 429 | 503,
+    public readonly retryAfter: string,
+  ) {
+    super(code);
+    this.name = "DisplayTtsAdmissionError";
+  }
+}
+
 export async function handleSessionTts(
   req: Request,
   sessionId: string,
   inviteToken?: string | null,
+  displayToken?: string | null,
 ) {
-  const access = await resolveInviteAwareAccess(sessionId, inviteToken);
-  if (!access) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const publicAccess = accessPath(inviteToken, displayToken);
+  const access = await resolveInviteAwareAccess(
+    sessionId,
+    inviteToken,
+    displayToken,
+  );
+  if (!access)
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const body = bodySchema.safeParse(await req.json().catch(() => ({})));
   if (!body.success) {
@@ -47,7 +86,8 @@ export async function handleSessionTts(
       campaign: { select: { host: { select: { username: true } } } },
     },
   });
-  if (!session) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  if (!session)
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const event = await prisma.eventLog.findFirst({
     where: { id: body.data.eventId, sessionId },
@@ -65,7 +105,8 @@ export async function handleSessionTts(
     },
     access.role,
   );
-  if (!visible) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!visible)
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const readable = readableEventFromLog({
     id: visible.id,
@@ -105,9 +146,14 @@ export async function handleSessionTts(
   });
   const textHash = sha256(readable.text);
 
-  const cached = await findCachedTts(sessionId, readable.eventId, voice.voiceId, textHash);
+  const cached = await findCachedTts(
+    sessionId,
+    readable.eventId,
+    voice.voiceId,
+    textHash,
+  );
   if (cached?.status === "ready") {
-    return NextResponse.json(readyBody(sessionId, inviteToken, cached, voice));
+    return NextResponse.json(readyBody(sessionId, publicAccess, cached, voice));
   }
   if (cached?.status === "failed") {
     return NextResponse.json(
@@ -118,12 +164,25 @@ export async function handleSessionTts(
 
   let audio;
   try {
-    audio = await synthesizeCloneSpeech({
-      vocariumUser,
-      voiceId: voice.voiceId,
-      text: readable.text,
-    });
+    audio = await synthesizeOnce(
+      JSON.stringify([sessionId, readable.eventId, voice.voiceId, textHash]),
+      {
+        vocariumUser,
+        voiceId: voice.voiceId,
+        text: readable.text,
+      },
+      access.displayCapability,
+    );
   } catch (error) {
+    if (error instanceof DisplayTtsAdmissionError) {
+      return NextResponse.json(
+        { error: error.code },
+        {
+          status: error.status,
+          headers: { "retry-after": error.retryAfter },
+        },
+      );
+    }
     const message =
       error instanceof Error ? error.message.slice(0, 240) : "unknown";
 
@@ -146,7 +205,7 @@ export async function handleSessionTts(
         readable.eventId,
         voice.voiceId,
         textHash,
-        inviteToken,
+        publicAccess,
         voice,
       );
       if (raced) return raced;
@@ -179,7 +238,7 @@ export async function handleSessionTts(
         error: true,
       },
     });
-    return NextResponse.json(readyBody(sessionId, inviteToken, row, voice));
+    return NextResponse.json(readyBody(sessionId, publicAccess, row, voice));
   } catch (error) {
     const raced = await recoverFromCreateRace(
       error,
@@ -187,13 +246,16 @@ export async function handleSessionTts(
       readable.eventId,
       voice.voiceId,
       textHash,
-      inviteToken,
+      publicAccess,
       voice,
     );
     if (raced) return raced;
 
     return NextResponse.json(
-      { error: "tts_storage_failed", message: "Failed to persist synthesized audio" },
+      {
+        error: "tts_storage_failed",
+        message: "Failed to persist synthesized audio",
+      },
       { status: 500 },
     );
   }
@@ -204,8 +266,13 @@ export async function handleSessionTtsAudio(
   sessionId: string,
   cacheId: string,
   inviteToken?: string | null,
+  displayToken?: string | null,
 ) {
-  const access = await resolveInviteAwareAccess(sessionId, inviteToken);
+  const access = await resolveInviteAwareAccess(
+    sessionId,
+    inviteToken,
+    displayToken,
+  );
   if (!access) return new Response("forbidden", { status: 403 });
 
   const cached = await prisma.ttsAudioCache.findFirst({
@@ -244,7 +311,16 @@ export async function handleSessionTtsAudio(
 async function resolveInviteAwareAccess(
   sessionId: string,
   inviteToken?: string | null,
-) {
+  displayToken?: string | null,
+): Promise<ResolvedTtsAccess | null> {
+  if (displayToken) {
+    const claims = await resolveActiveDisplayCapability(
+      displayToken,
+      sessionId,
+      env().INVITE_HMAC_SECRET,
+    );
+    return claims ? { role: "player", displayCapability: claims } : null;
+  }
   const access = await resolveAccess({ sessionId });
   if (!access) return null;
   if (!inviteToken) return access;
@@ -263,6 +339,40 @@ async function resolveInviteAwareAccess(
   }
 
   return access;
+}
+
+function synthesizeOnce(
+  key: string,
+  input: Parameters<typeof synthesizeCloneSpeech>[0],
+  displayCapability?: DisplayTokenClaims,
+) {
+  const existing = ttsSynthesisInFlight.get(key);
+  if (existing) return existing;
+
+  const synthesis = (async () => {
+    if (displayCapability) {
+      let allowed = false;
+      try {
+        allowed = await consumeDisplayTtsBudget(displayCapability);
+      } catch {
+        throw new DisplayTtsAdmissionError("display_tts_unavailable", 503, "5");
+      }
+      if (!allowed) {
+        throw new DisplayTtsAdmissionError(
+          "display_tts_rate_limited",
+          429,
+          "60",
+        );
+      }
+    }
+    return synthesizeCloneSpeech(input);
+  })().finally(() => {
+    if (ttsSynthesisInFlight.get(key) === synthesis) {
+      ttsSynthesisInFlight.delete(key);
+    }
+  });
+  ttsSynthesisInFlight.set(key, synthesis);
+  return synthesis;
 }
 
 async function findCachedTts(
@@ -295,14 +405,14 @@ async function recoverFromCreateRace(
   eventId: string,
   voiceId: string,
   textHash: string,
-  inviteToken: string | null | undefined,
+  publicAccess: PublicTtsAccess,
   voice: ResolvedVoice,
 ) {
   if (!isUniqueConstraintError(error)) return null;
 
   const cached = await findCachedTts(sessionId, eventId, voiceId, textHash);
   if (cached?.status === "ready") {
-    return NextResponse.json(readyBody(sessionId, inviteToken, cached, voice));
+    return NextResponse.json(readyBody(sessionId, publicAccess, cached, voice));
   }
   if (cached?.status === "failed") {
     return NextResponse.json(
@@ -315,20 +425,26 @@ async function recoverFromCreateRace(
 
 function readyBody(
   sessionId: string,
-  inviteToken: string | null | undefined,
+  publicAccess: PublicTtsAccess,
   cached: { id: string; mimeType: string | null; byteLength: number },
   voice: ResolvedVoice,
 ) {
+  const encodedSession = encodeURIComponent(sessionId);
+  const encodedCache = encodeURIComponent(cached.id);
+  const audioUrl =
+    publicAccess?.kind === "invite"
+      ? `/api/invite/sessions/${encodedSession}/tts/audio/${encodedCache}/${encodeURIComponent(
+          publicAccess.token,
+        )}`
+      : publicAccess?.kind === "display"
+        ? `/api/display/sessions/${encodedSession}/tts/audio/${encodedCache}/${encodeURIComponent(
+            publicAccess.token,
+          )}`
+        : `/api/sessions/${encodedSession}/tts/${encodedCache}`;
   return {
     status: "ready" as const,
     cacheId: cached.id,
-    audioUrl: inviteToken
-      ? `/api/invite/sessions/${encodeURIComponent(sessionId)}/tts/audio/${encodeURIComponent(
-          cached.id,
-        )}/${encodeURIComponent(inviteToken)}`
-      : `/api/sessions/${encodeURIComponent(sessionId)}/tts/${encodeURIComponent(
-          cached.id,
-        )}`,
+    audioUrl,
     mimeType: cached.mimeType,
     byteLength: cached.byteLength,
     voice: {
@@ -340,12 +456,21 @@ function readyBody(
   };
 }
 
+function accessPath(
+  inviteToken?: string | null,
+  displayToken?: string | null,
+): PublicTtsAccess {
+  if (displayToken) return { kind: "display", token: displayToken };
+  if (inviteToken) return { kind: "invite", token: inviteToken };
+  return null;
+}
+
 function isUniqueConstraintError(error: unknown) {
   return Boolean(
     error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: string }).code === "P2002",
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: string }).code === "P2002",
   );
 }
 

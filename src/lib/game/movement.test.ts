@@ -84,6 +84,30 @@ describe("tactical movement", () => {
     );
   });
 
+  it("uses terrain and surface costs when finding the cheapest route", () => {
+    const tokens: MovementToken[] = [
+      { id: "hero", x: 0, y: 0, team: "player", movement: 6 },
+    ];
+    const grid = {
+      columns: 3,
+      rows: 1,
+      terrain: [{ x: 1, y: 0, kind: "mud", movementCost: 3 }],
+      surfaces: [
+        {
+          x: 2,
+          y: 0,
+          type: "water",
+          intensity: 1,
+          duration: null,
+        },
+      ],
+    };
+
+    expect(movementCostForTokenMove("hero", tokens, { x: 2, y: 0 }, grid)).toBe(
+      5,
+    );
+  });
+
   it("allows free exploration movement anywhere valid without movement allowance", () => {
     const tokens: MovementToken[] = [
       { id: "hero", x: 0, y: 0, team: "player", movement: 1 },
@@ -120,6 +144,38 @@ describe("tactical movement", () => {
       { x: 4, y: 2, cost: 0 },
       { x: 5, y: 2, cost: 0 },
     ]);
+  });
+
+  it("preserves rich tactical fields while normalizing legacy movement data", () => {
+    expect(
+      normalizeMovementGrid({
+        columns: 4,
+        rows: 4,
+        terrain: [{ x: 1, y: 1, kind: "mud", movementCost: 3 }],
+        surfaces: [
+          {
+            x: 2,
+            y: 2,
+            type: "water",
+            intensity: 1,
+            duration: null,
+          },
+        ],
+        objects: [{ id: "door", x: 3, y: 2, kind: "door" }],
+      }),
+    ).toMatchObject({
+      terrain: [{ x: 1, y: 1, kind: "mud", movementCost: 3 }],
+      surfaces: [
+        {
+          x: 2,
+          y: 2,
+          type: "water",
+          intensity: 1,
+          duration: null,
+        },
+      ],
+      objects: [{ id: "door", x: 3, y: 2, kind: "door" }],
+    });
   });
 
   it("falls back to the default six-cell allowance", () => {

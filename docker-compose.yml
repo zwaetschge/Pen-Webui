@@ -39,6 +39,7 @@ x-common-env: &common-env
   OPENAI_MODEL_EMBEDDING: ${OPENAI_MODEL_EMBEDDING:-text-embedding-3-large}
   SETTINGS_TERMINAL_ENABLED: ${SETTINGS_TERMINAL_ENABLED:-false}
   SETTINGS_TERMINAL_IDLE_MINUTES: ${SETTINGS_TERMINAL_IDLE_MINUTES:-15}
+  CAST_AGENT_SOCKET: /run/plum-cast/agent.sock
   LOG_LEVEL: ${LOG_LEVEL:-info}
   APP_URL: https://${APP_DOMAIN}
 
@@ -54,12 +55,15 @@ services:
       <<: *common-env
     volumes:
       - codex_data:/home/nextjs/.codex
+      - cast_runtime:/run/plum-cast
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
       minio:
+        condition: service_started
+      cast-agent:
         condition: service_started
     networks:
       - internal
@@ -86,6 +90,15 @@ services:
       - "traefik.http.routers.dnd-web-invite.service=dnd-web"
       - "traefik.http.routers.dnd-web-invite.priority=100"
 
+      # ── Read-only TV receiver: signed display capability, no Authelia ──
+      - "traefik.http.routers.dnd-web-display.rule=Host(`${APP_DOMAIN}`) && (PathPrefix(`/display/sessions/`) || PathPrefix(`/api/display/sessions/`))"
+      - "traefik.http.routers.dnd-web-display.entrypoints=websecure"
+      - "traefik.http.routers.dnd-web-display.tls=true"
+      - "traefik.http.routers.dnd-web-display.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dnd-web-display.middlewares=dnd-sec-headers@docker,dnd-display-headers@docker"
+      - "traefik.http.routers.dnd-web-display.service=dnd-web"
+      - "traefik.http.routers.dnd-web-display.priority=110"
+
       # ── Health endpoint: bypass Authelia for monitoring ──
       - "traefik.http.routers.dnd-web-health.rule=Host(`${APP_DOMAIN}`) && Path(`/api/health`)"
       - "traefik.http.routers.dnd-web-health.entrypoints=websecure"
@@ -103,6 +116,8 @@ services:
       - "traefik.http.middlewares.dnd-sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
       - "traefik.http.middlewares.dnd-sec-headers.headers.stsSeconds=31536000"
       - "traefik.http.middlewares.dnd-sec-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.dnd-display-headers.headers.referrerPolicy=no-referrer"
+      - "traefik.http.middlewares.dnd-display-headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow"
 
   worker:
     build:
@@ -124,6 +139,29 @@ services:
         condition: service_started
     networks:
       - internal
+
+  cast-agent:
+    build:
+      context: ./cast-agent
+    image: plum-tabletop/cast-agent:${IMAGE_TAG:-latest}
+    container_name: dnd-cast-agent
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CAST_AGENT_SECRET: ${INVITE_HMAC_SECRET}
+      CAST_ALLOWED_ORIGIN: https://${APP_DOMAIN}
+      CAST_AGENT_SOCKET: /run/plum-cast/agent.sock
+      CHROMECAST_HOSTS: ${CHROMECAST_HOSTS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - cast_runtime:/run/plum-cast
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -220,6 +258,7 @@ volumes:
   redis_data:
   minio_data:
   codex_data:
+  cast_runtime:
 
 networks:
   internal:

@@ -5,6 +5,11 @@ import {
   codexDmSettings,
   setUserCodexDmSettings,
 } from "@/lib/dm/codex-settings";
+import {
+  codexModelCatalog,
+  validateCodexModelSelection,
+  validateCodexReasoningEffortSelection,
+} from "@/lib/dm/codex-models";
 import { terminalSettings } from "@/lib/dm/terminal";
 import { codexLoginStatus } from "@/lib/dm/llm";
 import { env } from "@/lib/env";
@@ -38,10 +43,11 @@ export async function GET() {
   try {
     const user = await requireDM();
     const e = env();
-    const [fallback, codex, codexRuntime] = await Promise.all([
+    const [fallback, codex, codexRuntime, codexModels] = await Promise.all([
       openaiFallbackSettings(user.id),
       codexLoginStatus(),
       codexDmSettings(user.id),
+      codexModelCatalog(),
     ]);
     return NextResponse.json({
       llm: {
@@ -54,6 +60,7 @@ export async function GET() {
       },
       codex,
       codexRuntime,
+      codexModels,
       fallback,
       hasOpenAIKey: fallback.hasUserKey,
       hasGlobalOpenAIKey: fallback.hasGlobalKey,
@@ -70,6 +77,32 @@ export async function POST(req: Request) {
   try {
     const user = await requireDM();
     const body = schema.parse(await req.json());
+    let codexModelDm = body.codexModelDm;
+
+    if (codexModelDm !== undefined || body.codexReasoningEffort !== undefined) {
+      const [catalog, currentCodexRuntime] = await Promise.all([
+        codexModelCatalog(),
+        codexDmSettings(user.id),
+      ]);
+      if (codexModelDm !== undefined) {
+        codexModelDm = validateCodexModelSelection(codexModelDm, catalog);
+      }
+
+      const defaults = env();
+      const effectiveModel =
+        body.codexModelDm !== undefined
+          ? (codexModelDm ?? defaults.CODEX_MODEL_DM)
+          : currentCodexRuntime.effectiveModel;
+      const effectiveReasoningEffort =
+        body.codexReasoningEffort !== undefined
+          ? (body.codexReasoningEffort ?? defaults.CODEX_REASONING_EFFORT_DM)
+          : currentCodexRuntime.effectiveReasoningEffort;
+      validateCodexReasoningEffortSelection(
+        effectiveModel,
+        effectiveReasoningEffort,
+        catalog,
+      );
+    }
 
     if (body.clearKey) {
       await clearUserOpenAIKey(user.id);
@@ -90,7 +123,7 @@ export async function POST(req: Request) {
       body.codexReasoningEffort !== undefined
     ) {
       await setUserCodexDmSettings(user.id, {
-        model: body.codexModelDm,
+        model: codexModelDm,
         reasoningEffort: body.codexReasoningEffort,
       });
     }

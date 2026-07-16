@@ -11,11 +11,11 @@
  *
  * Interactions:
  *   - select your active character token to show its movement range
- *   - click a highlighted grid cell to move
+ *   - tap/click a highlighted grid cell to move
  *
  * Pan/zoom for everyone:
- *   - middle-mouse drag = pan
- *   - wheel = zoom
+ *   - one-finger drag, middle-mouse drag, or Shift+drag = pan
+ *   - pinch or wheel = zoom
  *
  * Tokens and scene backgrounds come from server events. Fog-of-war is still a
  * separate server-authoritative layer.
@@ -43,7 +43,12 @@ import {
   tokenMovement,
   type MovementTile,
 } from "@/lib/game/movement";
-import { isActiveTurnForToken } from "@/lib/game/combat-turn";
+import { isTurnAvailableForToken } from "@/lib/game/combat-turn";
+import {
+  cameraForWorldAnchor,
+  fitCameraToViewport,
+  type Point,
+} from "@/lib/game/tactical-camera";
 
 const CELL = 88;
 const MAP_COLUMNS = TACTICAL_MAP_COLUMNS;
@@ -72,6 +77,7 @@ type Props = {
   localCharacters?: Array<{ id: string; name: string }>;
   selectedTokenId?: string | null;
   onSelectedTokenChange?: (tokenId: string | null) => void;
+  readOnly?: boolean;
 };
 
 export function TacticalMap(props: Props) {
@@ -82,6 +88,7 @@ export function TacticalMap(props: Props) {
   const worldRef = useRef<Container | null>(null);
   const movementOverlayRef = useRef<Graphics | null>(null);
   const blockedOverlayRef = useRef<Graphics | null>(null);
+  const environmentOverlayRef = useRef<Graphics | null>(null);
   const backgroundRef = useRef<Sprite | null>(null);
   const backgroundSeqRef = useRef(0);
   const cameraTouchedRef = useRef(false);
@@ -98,6 +105,12 @@ export function TacticalMap(props: Props) {
   const tokens = useGame((s) => s.tokens);
   const scene = useGame((s) => s.scene);
   const combat = useGame((s) => s.combat);
+  const surfaces = useGame((s) => s.gameplay.surfaces);
+  const objects = useGame((s) => s.gameplay.objects);
+  const hiddenTokenIds = useGame((s) => s.gameplay.hiddenTokenIds);
+  const objectives = useGame((s) => s.gameplay.objectives);
+  const aiIntent = useGame((s) => s.gameplay.aiIntent);
+  const turnGroup = useGame((s) => s.gameplay.turnGroup);
   const controlledSelectedTokenId = props.selectedTokenId;
   const onSelectedTokenChange = props.onSelectedTokenChange;
   const selectedTokenId =
@@ -134,6 +147,7 @@ export function TacticalMap(props: Props) {
       token: selectedToken,
       localCharacterIds,
       combat,
+      turnGroup,
     })
       ? selectedToken
       : null;
@@ -217,6 +231,9 @@ export function TacticalMap(props: Props) {
       const blockedOverlay = new Graphics();
       blockedOverlayRef.current = blockedOverlay;
       world.addChild(blockedOverlay);
+      const environmentOverlay = new Graphics();
+      environmentOverlayRef.current = environmentOverlay;
+      world.addChild(environmentOverlay);
       const movementOverlay = new Graphics();
       movementOverlayRef.current = movementOverlay;
       world.addChild(movementOverlay);
@@ -239,14 +256,16 @@ export function TacticalMap(props: Props) {
         grid.stroke();
         const bg = backgroundRef.current;
         if (bg) fitBackground(bg);
-        if (!cameraTouchedRef.current) resetCamera(app, world);
+        if (!cameraTouchedRef.current) {
+          resetCamera(app, world, propsRef.current.readOnly === true);
+        }
       };
       drawGrid();
       app.renderer.on("resize", drawGrid);
       cleanups.push(() => app.renderer.off("resize", drawGrid));
       setPixiReadyVersion((version) => version + 1);
 
-      surface.on("pointerdown", (event: FederatedPointerEvent) => {
+      surface.on("pointertap", (event: FederatedPointerEvent) => {
         if (event.button !== 0 || event.shiftKey) {
           return;
         }
@@ -264,30 +283,119 @@ export function TacticalMap(props: Props) {
         });
       });
 
-      // pan + zoom
-      let panning = false;
-      let startX = 0;
-      let startY = 0;
-      let originX = 0;
-      let originY = 0;
+      // Mouse and touch camera controls. Pixi's pointertap only fires if this
+      // gesture did not turn into a drag, so moving the camera cannot also move
+      // a token accidentally.
+      let mousePanning = false;
+      let mouseStartX = 0;
+      let mouseStartY = 0;
+      let mouseOriginX = 0;
+      let mouseOriginY = 0;
+      const touchPointers = new Map<number, Point>();
+      let touchLastPoint: Point | null = null;
+      let pinch: {
+        distance: number;
+        startScale: number;
+        worldAnchor: Point;
+      } | null = null;
+
+      const canvasPoint = (clientX: number, clientY: number) => {
+        const rect = app.canvas.getBoundingClientRect();
+        return { x: clientX - rect.left, y: clientY - rect.top };
+      };
+
+      const beginPinch = () => {
+        const points = [...touchPointers.values()].slice(0, 2);
+        if (points.length < 2) {
+          pinch = null;
+          return;
+        }
+        const midpoint = pointMidpoint(points[0], points[1]);
+        const viewportPoint = canvasPoint(midpoint.x, midpoint.y);
+        pinch = {
+          distance: Math.max(1, pointDistance(points[0], points[1])),
+          startScale: world.scale.x,
+          worldAnchor: {
+            x: (viewportPoint.x - world.x) / world.scale.x,
+            y: (viewportPoint.y - world.y) / world.scale.y,
+          },
+        };
+      };
+
       const onPointerDown = (e: PointerEvent) => {
+        if (propsRef.current.readOnly) return;
+        if (e.pointerType === "touch" || e.pointerType === "pen") {
+          e.preventDefault();
+          cameraTouchedRef.current = true;
+          touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (touchPointers.size === 1) {
+            touchLastPoint = { x: e.clientX, y: e.clientY };
+            pinch = null;
+          } else if (touchPointers.size === 2) {
+            touchLastPoint = null;
+            beginPinch();
+          }
+          return;
+        }
         if (e.button !== 1 && !e.shiftKey) return;
         cameraTouchedRef.current = true;
-        panning = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        originX = world.x;
-        originY = world.y;
+        mousePanning = true;
+        mouseStartX = e.clientX;
+        mouseStartY = e.clientY;
+        mouseOriginX = world.x;
+        mouseOriginY = world.y;
       };
       const onPointerMove = (e: PointerEvent) => {
-        if (!panning) return;
-        world.x = originX + (e.clientX - startX);
-        world.y = originY + (e.clientY - startY);
+        if (touchPointers.has(e.pointerId)) {
+          e.preventDefault();
+          touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (touchPointers.size >= 2) {
+            if (!pinch) beginPinch();
+            const points = [...touchPointers.values()].slice(0, 2);
+            if (!pinch || points.length < 2) return;
+            const midpoint = pointMidpoint(points[0], points[1]);
+            const viewportPoint = canvasPoint(midpoint.x, midpoint.y);
+            const next = cameraForWorldAnchor({
+              worldAnchor: pinch.worldAnchor,
+              viewportPoint,
+              scale:
+                pinch.startScale *
+                (pointDistance(points[0], points[1]) / pinch.distance),
+              minScale: MIN_ZOOM,
+              maxScale: MAX_ZOOM,
+            });
+            world.scale.set(next.scale);
+            world.x = next.x;
+            world.y = next.y;
+            return;
+          }
+          if (touchLastPoint) {
+            world.x += e.clientX - touchLastPoint.x;
+            world.y += e.clientY - touchLastPoint.y;
+          }
+          touchLastPoint = { x: e.clientX, y: e.clientY };
+          return;
+        }
+        if (!mousePanning) return;
+        world.x = mouseOriginX + (e.clientX - mouseStartX);
+        world.y = mouseOriginY + (e.clientY - mouseStartY);
       };
-      const onPointerUp = () => {
-        panning = false;
+      const onPointerUp = (e: PointerEvent) => {
+        if (touchPointers.delete(e.pointerId)) {
+          if (touchPointers.size === 1) {
+            touchLastPoint = [...touchPointers.values()][0];
+            pinch = null;
+          } else if (touchPointers.size === 0) {
+            touchLastPoint = null;
+            pinch = null;
+          } else {
+            beginPinch();
+          }
+        }
+        mousePanning = false;
       };
       const onWheel = (e: WheelEvent) => {
+        if (propsRef.current.readOnly) return;
         e.preventDefault();
         cameraTouchedRef.current = true;
         const before = screenToWorld(app, world, e.clientX, e.clientY);
@@ -305,12 +413,16 @@ export function TacticalMap(props: Props) {
       el.addEventListener("pointerdown", onPointerDown);
       window.addEventListener("pointermove", onPointerMove);
       window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
       el.addEventListener("wheel", onWheel, { passive: false });
       cleanups.push(() => el.removeEventListener("pointerdown", onPointerDown));
       cleanups.push(() =>
         window.removeEventListener("pointermove", onPointerMove),
       );
       cleanups.push(() => window.removeEventListener("pointerup", onPointerUp));
+      cleanups.push(() =>
+        window.removeEventListener("pointercancel", onPointerUp),
+      );
       cleanups.push(() => el.removeEventListener("wheel", onWheel));
     })();
 
@@ -332,6 +444,7 @@ export function TacticalMap(props: Props) {
       backgroundRef.current = null;
       movementOverlayRef.current = null;
       blockedOverlayRef.current = null;
+      environmentOverlayRef.current = null;
     };
   }, []);
 
@@ -401,14 +514,22 @@ export function TacticalMap(props: Props) {
         updateInitials(c, t);
         syncTokenImage(c as TokenContainer, t);
       }
-      const canSelect = canSelectToken({
-        token: t,
-        localCharacterIds,
-        combat,
-      });
+      const canSelect =
+        canSelectToken({
+          token: t,
+          localCharacterIds,
+          combat,
+          turnGroup,
+        }) && !props.readOnly;
       configureTokenSelection(c, t, canSelect, () => {
         updateSelectedTokenId((current) => (current === t.id ? null : t.id));
       });
+      const hidden = hiddenTokenIds.includes(t.id);
+      c.visible =
+        !hidden ||
+        t.team === "player" ||
+        (!props.readOnly && props.role === "host");
+      c.alpha = hidden ? 0.42 : 1;
     }
     // Remove stale
     for (const [id, c] of map.entries()) {
@@ -423,6 +544,10 @@ export function TacticalMap(props: Props) {
     pixiReadyVersion,
     tokens,
     updateSelectedTokenId,
+    props.readOnly,
+    props.role,
+    hiddenTokenIds,
+    turnGroup,
   ]);
 
   useEffect(() => {
@@ -433,6 +558,7 @@ export function TacticalMap(props: Props) {
           token: tokens[selectedTokenId],
           localCharacterIds,
           combat,
+          turnGroup,
         }))
     ) {
       updateSelectedTokenId(null);
@@ -443,6 +569,7 @@ export function TacticalMap(props: Props) {
     selectedTokenId,
     tokens,
     updateSelectedTokenId,
+    turnGroup,
   ]);
 
   useEffect(() => {
@@ -463,9 +590,20 @@ export function TacticalMap(props: Props) {
     drawBlockedOverlay(blockedOverlayRef.current, blockedTiles);
   }, [blockedTiles, pixiReadyVersion]);
 
+  useEffect(() => {
+    drawEnvironmentOverlay(environmentOverlayRef.current, surfaces, objects);
+  }, [objects, pixiReadyVersion, surfaces]);
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-ink-500 via-ink-600 to-ink-500">
-      <div ref={ref} className="h-full w-full" style={{ cursor: "grab" }} />
+      <div
+        ref={ref}
+        className="h-full w-full"
+        style={{
+          cursor: props.readOnly ? "default" : "grab",
+          touchAction: props.readOnly ? "auto" : "none",
+        }}
+      />
       <div className="bg-ink-600/78 pointer-events-none absolute left-4 top-4 rounded-md border border-brass-700/50 px-3 py-1.5 font-display text-xs uppercase tracking-[0.22em] text-brass-300 shadow-brass">
         {combat.active
           ? props.role === "host"
@@ -483,6 +621,26 @@ export function TacticalMap(props: Props) {
             ? "Battlemap"
             : "Raster"}
       </div>
+      {objectives.length > 0 ? (
+        <div className="bg-ink-600/84 pointer-events-none absolute right-4 top-4 max-w-[min(23rem,48vw)] rounded-md border border-brass-700/45 px-3 py-2 shadow-xl">
+          <p className="font-display text-[9px] uppercase tracking-[0.24em] text-brass-400">
+            Begegnungsziele
+          </p>
+          {objectives.map((objective) => (
+            <p
+              key={objective.id}
+              className="mt-1 truncate font-serif text-xs text-parchment-100"
+            >
+              {objective.label} · {objective.progress}/{objective.target}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {aiIntent ? (
+        <div className="bg-ink-600/82 pointer-events-none absolute bottom-12 right-4 max-w-[min(20rem,44vw)] rounded-md border border-blood-500/35 px-3 py-1.5 font-serif text-xs text-ink-100">
+          Gegnerabsicht: {aiIntent.label}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -549,10 +707,11 @@ function configureTokenSelection(
   onSelect: (event: FederatedPointerEvent) => void,
 ) {
   c.removeAllListeners("pointerdown");
+  c.removeAllListeners("pointertap");
   c.eventMode = canSelect ? "static" : "none";
   c.cursor = canSelect ? "pointer" : "default";
   if (!canSelect) return;
-  c.on("pointerdown", (event: FederatedPointerEvent) => {
+  c.on("pointertap", (event: FederatedPointerEvent) => {
     event.stopPropagation();
     onSelect(event);
   });
@@ -668,17 +827,80 @@ function drawBlockedOverlay(
   }
 }
 
+function drawEnvironmentOverlay(
+  overlay: Graphics | null,
+  surfaces: Array<Record<string, unknown>>,
+  objects: Array<Record<string, unknown>>,
+) {
+  if (!overlay) return;
+  overlay.clear();
+
+  for (const surface of surfaces) {
+    const x = Number(surface.x);
+    const y = Number(surface.y);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) continue;
+    const type = String(surface.type ?? "");
+    const color =
+      type === "fire"
+        ? 0xd35a22
+        : type === "water"
+          ? 0x2f6ba8
+          : type === "ice"
+            ? 0x9bd9e8
+            : type === "lightning"
+              ? 0xbfa7ff
+              : 0x6b5a30;
+    overlay.rect(x * CELL + 4, y * CELL + 4, CELL - 8, CELL - 8);
+    overlay.fill({
+      color,
+      alpha: Math.min(0.48, 0.18 + Number(surface.intensity ?? 1) * 0.08),
+    });
+    overlay.stroke({ width: 2, color, alpha: 0.72 });
+  }
+
+  for (const object of objects) {
+    if (object.state === "destroyed" || object.removed === true) continue;
+    const x = Number(object.x);
+    const y = Number(object.y);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) continue;
+    const kind = String(object.kind ?? "destructible");
+    const color =
+      kind === "door"
+        ? 0xb8894a
+        : kind === "barrel"
+          ? 0x9e5c32
+          : kind === "trap"
+            ? 0x8a1a1a
+            : 0x6f6655;
+    const inset = kind === "door" ? 12 : 20;
+    overlay.roundRect(
+      x * CELL + inset,
+      y * CELL + inset,
+      CELL - inset * 2,
+      CELL - inset * 2,
+      7,
+    );
+    overlay.fill({ color, alpha: 0.78 });
+    overlay.stroke({ width: 3, color: 0xf0d58a, alpha: 0.5 });
+  }
+}
+
 function canControlToken(input: {
   token: Token;
   localCharacterIds: Set<string>;
   combat: CombatState;
+  turnGroup: {
+    tokenIds: string[];
+    completedTokenIds: string[];
+  } | null;
 }) {
   if (!input.localCharacterIds.has(input.token.id)) return false;
   if (!input.combat.active) return true;
-  return isActiveTurnForToken({
+  return isTurnAvailableForToken({
     initiative: input.combat.initiative,
     turnIndex: input.combat.turnIndex,
     token: input.token,
+    turnGroup: input.turnGroup,
   });
 }
 
@@ -686,6 +908,10 @@ function canSelectToken(input: {
   token: Token;
   localCharacterIds: Set<string>;
   combat: CombatState;
+  turnGroup: {
+    tokenIds: string[];
+    completedTokenIds: string[];
+  } | null;
 }) {
   if (input.combat.active) return true;
   return canControlToken(input);
@@ -739,12 +965,35 @@ function fitBackground(bg: Sprite) {
   bg.y = (MAP_HEIGHT - tex.height * scale) / 2;
 }
 
-function resetCamera(app: Application, world: Container) {
+function resetCamera(app: Application, world: Container, readOnly: boolean) {
+  if (readOnly) {
+    const camera = fitCameraToViewport({
+      viewportWidth: app.screen.width,
+      viewportHeight: app.screen.height,
+      contentWidth: MAP_WIDTH,
+      contentHeight: MAP_HEIGHT,
+      padding: 16,
+      minScale: 0.1,
+      maxScale: 1,
+    });
+    world.scale.set(camera.scale);
+    world.x = camera.x;
+    world.y = camera.y;
+    return;
+  }
   const scale =
     app.screen.width < 700 ? 0.74 : app.screen.height < 640 ? 0.9 : 1;
   world.scale.set(scale);
   world.x = Math.round((app.screen.width - MAP_WIDTH * scale) / 2);
   world.y = app.screen.height < 640 ? 8 : 16;
+}
+
+function pointMidpoint(left: Point, right: Point): Point {
+  return { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 };
+}
+
+function pointDistance(left: Point, right: Point) {
+  return Math.hypot(right.x - left.x, right.y - left.y);
 }
 
 function screenToWorld(

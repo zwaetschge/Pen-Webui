@@ -73,7 +73,15 @@ export async function activeCombatStateForSession(
   const liveEvents = await prisma.eventLog.findMany({
     where: {
       sessionId,
-      type: { in: ["token_moved", "damage_applied", "combat_action_used"] },
+      type: {
+        in: [
+          "token_moved",
+          "token_forced_moved",
+          "damage_applied",
+          "healing_applied",
+          "combat_action_used",
+        ],
+      },
       ts: { gte: combatStart.ts },
     },
     orderBy: [{ ts: "asc" }, { id: "asc" }],
@@ -83,7 +91,10 @@ export async function activeCombatStateForSession(
   const actionEvents: CombatResourceEvent[] = [];
 
   for (const liveEvent of liveEvents) {
-    if (liveEvent.type === "token_moved") {
+    if (
+      liveEvent.type === "token_moved" ||
+      liveEvent.type === "token_forced_moved"
+    ) {
       const move = combatMoveEvent(liveEvent.payload);
       if (!move) continue;
       moveEvents.push(move);
@@ -103,6 +114,24 @@ export async function activeCombatStateForSession(
       tokens.set(damage.targetId, {
         ...token,
         hp: Math.max(0, currentHp - damage.amount),
+      });
+    }
+    if (liveEvent.type === "healing_applied") {
+      const healing = combatDamageEvent(liveEvent.payload);
+      if (!healing) continue;
+      const token = tokens.get(healing.targetId);
+      if (!token) continue;
+      const currentHp =
+        typeof token.hp === "number" && Number.isFinite(token.hp)
+          ? token.hp
+          : 0;
+      const maxHp =
+        typeof token.maxHp === "number" && Number.isFinite(token.maxHp)
+          ? token.maxHp
+          : Number.POSITIVE_INFINITY;
+      tokens.set(healing.targetId, {
+        ...token,
+        hp: Math.min(maxHp, currentHp + healing.amount),
       });
     }
     if (liveEvent.type === "combat_action_used") {

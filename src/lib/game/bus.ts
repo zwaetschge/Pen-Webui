@@ -11,16 +11,26 @@
 
 import IORedis, { Redis } from "ioredis";
 import { prisma } from "../db";
-import { CLIENT_EVENT_TYPES } from "./events";
+import {
+  BOOTSTRAP_EVENT_TYPES,
+  CLIENT_EVENT_TYPES,
+  isBootstrapEventType,
+} from "./events";
 
 export type GameEvent = {
   id: string;
   type: string;
   payload: Record<string, unknown>;
   ts: number;
-  /** scope: dm — only the DM client sees it; player — everyone */
-  scope?: "all" | "dm";
+  /** Delivery scope. Character-scoped events never reach the shared display. */
+  scope?: GameEventScope;
 };
+
+export type GameEventScope =
+  | "all"
+  | "dm"
+  | "display"
+  | `character:${string}`;
 
 let pub: Redis | null = null;
 let pubConnection: Promise<void> | null = null;
@@ -52,27 +62,82 @@ export async function publishEvent(
   sessionId: string,
   type: string,
   payload: Record<string, unknown>,
-  opts: { scope?: "all" | "dm"; actorId?: string | null } = {},
+  opts: {
+    scope?: GameEventScope;
+    actorId?: string | null;
+    eventId?: string;
+  } = {},
 ) {
-  const row = await prisma.eventLog.create({
-    data: {
-      sessionId,
-      actorId: opts.actorId ?? undefined,
-      type,
-      payload: payload as never,
-      scope: opts.scope ?? "all",
-    },
-    select: { id: true, ts: true },
-  });
+  let row: { id: string; ts: Date };
+  let eventType = type;
+  let eventPayload = payload;
+  let eventScope: GameEventScope = opts.scope ?? "all";
+  try {
+    row = await prisma.eventLog.create({
+      data: {
+        id: opts.eventId ?? undefined,
+        sessionId,
+        actorId: opts.actorId ?? undefined,
+        type,
+        payload: payload as never,
+        scope: eventScope,
+      },
+      select: { id: true, ts: true },
+    });
+  } catch (error) {
+    if (!opts.eventId || !isUniqueConstraintError(error)) throw error;
+    const existing = await prisma.eventLog.findFirst({
+      where: { id: opts.eventId, sessionId, type },
+      select: { id: true, type: true, payload: true, scope: true, ts: true },
+    });
+    if (!existing) throw error;
+    row = { id: existing.id, ts: existing.ts };
+    eventType = existing.type;
+    eventPayload = existing.payload as Record<string, unknown>;
+    eventScope = gameEventScope(existing.scope);
+  }
   const ev: GameEvent = {
     id: row.id,
-    type,
-    payload,
+    type: eventType,
+    payload: eventPayload,
     ts: row.ts.getTime(),
-    scope: opts.scope ?? "all",
+    scope: eventScope,
   };
-  await boundedPublish(pubClient(), channel(sessionId), JSON.stringify(ev));
+  try {
+    await boundedPublish(pubClient(), channel(sessionId), JSON.stringify(ev));
+  } catch (error) {
+    // EventLog is the canonical stream. Once the row is durable, a transient
+    // Pub/Sub outage must not abort or duplicate the DM turn; reconnect replay
+    // repairs the client. Never log the payload (it may contain private text).
+    console.error("Game event persisted but live broadcast failed", {
+      sessionId,
+      eventId: ev.id,
+      type,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+  }
   return ev;
+}
+
+function gameEventScope(value: unknown): GameEventScope {
+  if (value === "dm" || value === "display") return value;
+  if (
+    typeof value === "string" &&
+    value.startsWith("character:") &&
+    value.length > "character:".length
+  ) {
+    return value as `character:${string}`;
+  }
+  return "all";
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
 }
 
 async function boundedPublish(client: Redis, topic: string, message: string) {
@@ -154,7 +219,12 @@ export async function recentEvents(
     : null;
 
   const incrementalWhere = cursor
-    ? { ts: { gte: cursor.ts } }
+    ? {
+        OR: [
+          { ts: { gt: cursor.ts } },
+          { ts: cursor.ts, id: { gt: cursor.id } },
+        ],
+      }
     : opts.sinceMs
       ? { ts: { gte: new Date(opts.sinceMs) } }
       : {};
@@ -179,12 +249,70 @@ export async function recentEvents(
     },
   });
   const replayRows = incremental ? rows : rows.reverse();
+  if (!incremental) {
+    const select = {
+      id: true,
+      type: true,
+      payload: true,
+      scope: true,
+      ts: true,
+    } as const;
+    const [latestBootstrap, latestScene, latestCombatLifecycle] =
+      await Promise.all([
+        replayRows.some((row) => isBootstrapEventType(row.type))
+          ? null
+          : prisma.eventLog.findFirst({
+              where: {
+                sessionId,
+                type: { in: [...BOOTSTRAP_EVENT_TYPES] },
+              },
+              orderBy: [{ ts: "desc" }, { id: "desc" }],
+              select,
+            }),
+        replayRows.some((row) => row.type === "scene_set")
+          ? null
+          : prisma.eventLog.findFirst({
+              where: { sessionId, type: "scene_set" },
+              orderBy: [{ ts: "desc" }, { id: "desc" }],
+              select,
+            }),
+        replayRows.some((row) => row.type === "combat_started")
+          ? null
+          : prisma.eventLog.findFirst({
+              where: {
+                sessionId,
+                type: {
+                  in: [
+                    "combat_started",
+                    "combat_ended",
+                    "game_over",
+                    "session_ended",
+                    "scene_ended",
+                  ],
+                },
+              },
+              orderBy: [{ ts: "desc" }, { id: "desc" }],
+              select,
+            }),
+      ]);
+    const anchors = [
+      latestBootstrap && isBootstrapEventType(latestBootstrap.type)
+        ? latestBootstrap
+        : null,
+      latestScene?.type === "scene_set" ? latestScene : null,
+      latestCombatLifecycle?.type === "combat_started"
+        ? latestCombatLifecycle
+        : null,
+    ].filter((row): row is NonNullable<typeof row> => row !== null);
+    const replayIds = new Set(replayRows.map((row) => row.id));
+    replayRows.unshift(...anchors.filter((row) => !replayIds.has(row.id)));
+  }
   return replayRows.map((r) => ({
     id: r.id,
     type: r.type,
     payload: r.payload as Record<string, unknown>,
     ts: r.ts.getTime(),
-    scope: r.scope === "dm" ? "dm" : "all",
+    scope: gameEventScope(r.scope),
   }));
 }
 

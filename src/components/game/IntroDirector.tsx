@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   buildIntroDirectorChapters,
@@ -16,9 +16,13 @@ const CHARACTER_DURATION_MS = 6200;
 export function IntroDirector({
   sessionId,
   enabled,
+  displayMode = false,
+  onComplete,
 }: {
   sessionId: string;
   enabled: boolean;
+  displayMode?: boolean;
+  onComplete?: () => void;
 }) {
   const scene = useGame((s) => s.scene);
   const intro = scene.introSequence;
@@ -44,6 +48,29 @@ export function IntroDirector({
   const [visible, setVisible] = useState(false);
   const [played, setPlayed] = useState(false);
   const [chapterIndex, setChapterIndex] = useState(0);
+  const notifiedCompletionKeyRef = useRef<string | null>(null);
+  const notifyComplete = useCallback(
+    (key: string | null, wasPlayed: boolean) => {
+      if (
+        !shouldNotifyIntroComplete({
+          wasPlayed,
+          storageKey: key,
+          notifiedKey: notifiedCompletionKeyRef.current,
+        })
+      ) {
+        return;
+      }
+      notifiedCompletionKeyRef.current = key;
+      onComplete?.();
+    },
+    [onComplete],
+  );
+  const finish = useCallback(() => {
+    markPlayed(storageKey);
+    setPlayed(true);
+    setVisible(false);
+    notifyComplete(storageKey, true);
+  }, [notifyComplete, storageKey]);
 
   useEffect(() => {
     if (!enabled) {
@@ -65,10 +92,26 @@ export function IntroDirector({
     setPlayed(wasPlayed);
     setVisible(!wasPlayed);
     setChapterIndex(0);
-  }, [activeKey, chapters.length, enabled, storageKey]);
+    notifyComplete(storageKey, wasPlayed);
+  }, [
+    activeKey,
+    chapters.length,
+    enabled,
+    notifyComplete,
+    storageKey,
+  ]);
 
   useEffect(() => {
-    if (!visible || reducedMotion || chapters.length === 0) return;
+    if (
+      !shouldAutoAdvanceIntro({
+        visible,
+        reducedMotion,
+        displayMode,
+        chapterCount: chapters.length,
+      })
+    ) {
+      return;
+    }
     const chapter = chapters[chapterIndex];
     const timeout = window.setTimeout(
       () => {
@@ -76,9 +119,7 @@ export function IntroDirector({
           setChapterIndex((index) => index + 1);
           return;
         }
-        markPlayed(storageKey);
-        setPlayed(true);
-        setVisible(false);
+        finish();
       },
       chapter?.kind === "character"
         ? CHARACTER_DURATION_MS
@@ -86,16 +127,14 @@ export function IntroDirector({
     );
 
     return () => window.clearTimeout(timeout);
-  }, [chapterIndex, chapters, reducedMotion, storageKey, visible]);
+  }, [chapterIndex, chapters, displayMode, finish, reducedMotion, visible]);
 
   if (!enabled || !intro || chapters.length === 0) return null;
 
   const chapter = chapters[Math.min(chapterIndex, chapters.length - 1)];
 
   function close() {
-    markPlayed(storageKey);
-    setPlayed(true);
-    setVisible(false);
+    finish();
   }
 
   function replay() {
@@ -138,18 +177,25 @@ export function IntroDirector({
                   {intro.title ?? scene.sceneTitle ?? "Auftakt"}
                 </h2>
               </div>
-              <button
-                type="button"
-                onClick={close}
-                className="shrink-0 rounded-md border border-brass-400/35 bg-ink-600/60 px-3 py-2 font-display text-[10px] uppercase tracking-[0.2em] text-brass-300 shadow-brass backdrop-blur hover:border-brass-300/70 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
-              >
-                Überspringen
-              </button>
+              {!displayMode ? (
+                <button
+                  type="button"
+                  onClick={close}
+                  className="shrink-0 rounded-md border border-brass-400/35 bg-ink-600/60 px-3 py-2 font-display text-[10px] uppercase tracking-[0.2em] text-brass-300 shadow-brass backdrop-blur hover:border-brass-300/70 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
+                >
+                  Überspringen
+                </button>
+              ) : null}
             </header>
 
             <main
               aria-live="polite"
-              className="grid min-h-0 items-center gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]"
+              className={cn(
+                "grid min-h-0 items-center gap-4",
+                chapter.kind === "character"
+                  ? "lg:grid-cols-[minmax(0,1fr)_20rem]"
+                  : "lg:grid-cols-1",
+              )}
             >
               <motion.div
                 key={chapter.id}
@@ -197,29 +243,35 @@ export function IntroDirector({
             </main>
 
             <footer className="grid gap-3 pb-7 sm:pb-8 lg:grid-cols-[1fr_auto] lg:items-end">
-              <ChapterRail
-                chapters={chapters}
-                currentIndex={chapterIndex}
-                onSelect={setChapterIndex}
-              />
+              {!displayMode ? (
+                <ChapterRail
+                  chapters={chapters}
+                  currentIndex={chapterIndex}
+                  onSelect={setChapterIndex}
+                />
+              ) : (
+                <div />
+              )}
               <div className="flex items-center justify-between gap-2 lg:justify-end">
                 <p className="font-display text-[10px] uppercase tracking-[0.2em] text-ink-100">
                   {chapterIndex + 1}/{chapters.length}
                 </p>
-                <button
-                  type="button"
-                  onClick={next}
-                  className="rounded-md border border-brass-400/50 bg-brass-700/35 px-4 py-2 font-display text-xs uppercase tracking-[0.22em] text-parchment-50 shadow-brass hover:border-brass-300/80 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
-                >
-                  {chapterIndex < chapters.length - 1
-                    ? "Weiter"
-                    : "Zur Szene"}
-                </button>
+                {!displayMode ? (
+                  <button
+                    type="button"
+                    onClick={next}
+                    className="rounded-md border border-brass-400/50 bg-brass-700/35 px-4 py-2 font-display text-xs uppercase tracking-[0.22em] text-parchment-50 shadow-brass hover:border-brass-300/80 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
+                  >
+                    {chapterIndex < chapters.length - 1
+                      ? "Weiter"
+                      : "Zur Szene"}
+                  </button>
+                ) : null}
               </div>
             </footer>
           </div>
         </motion.div>
-      ) : played ? (
+      ) : played && !displayMode ? (
         <motion.div
           key="intro-replay"
           initial={{ opacity: 0, y: -8 }}
@@ -230,13 +282,38 @@ export function IntroDirector({
           <button
             type="button"
             onClick={replay}
-            className="pointer-events-auto rounded-md border border-brass-700/45 bg-ink-600/72 px-3 py-2 font-display text-[10px] uppercase tracking-[0.22em] text-brass-300 shadow-brass backdrop-blur hover:border-brass-400/70 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
+            className="bg-ink-600/72 pointer-events-auto rounded-md border border-brass-700/45 px-3 py-2 font-display text-[10px] uppercase tracking-[0.22em] text-brass-300 shadow-brass backdrop-blur hover:border-brass-400/70 focus:outline-none focus:ring-2 focus:ring-brass-300/50"
           >
-            Vorspann
+            Auftakt
           </button>
         </motion.div>
       ) : null}
     </AnimatePresence>
+  );
+}
+
+export function shouldAutoAdvanceIntro(input: {
+  visible: boolean;
+  reducedMotion: boolean;
+  displayMode: boolean;
+  chapterCount: number;
+}) {
+  return (
+    input.visible &&
+    input.chapterCount > 0 &&
+    (!input.reducedMotion || input.displayMode)
+  );
+}
+
+export function shouldNotifyIntroComplete(input: {
+  wasPlayed: boolean;
+  storageKey: string | null;
+  notifiedKey: string | null;
+}) {
+  return (
+    input.wasPlayed &&
+    Boolean(input.storageKey) &&
+    input.notifiedKey !== input.storageKey
   );
 }
 
@@ -267,77 +344,32 @@ function IntroBackdrop({ backgroundUrl }: { backgroundUrl?: string | null }) {
 }
 
 function ChapterSpotlight({ chapter }: { chapter: IntroDirectorChapter }) {
-  if (chapter.kind === "character") {
-    return (
-      <div className="hidden min-h-0 lg:block">
-        <div className="relative ml-auto aspect-[3/4] max-h-[56dvh] w-full max-w-[20rem] overflow-hidden rounded-md border border-brass-400/45 bg-ink-500/55 shadow-2xl">
-          {chapter.portraitUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={chapter.portraitUrl}
-              alt={chapter.title}
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center bg-[linear-gradient(135deg,rgba(195,154,78,0.18),rgba(156,123,214,0.18))]">
-              <span className="font-display text-7xl uppercase text-brass-300/70">
-                {chapter.title.slice(0, 1)}
-              </span>
-            </div>
-          )}
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink-600 via-ink-600/82 to-transparent px-4 pb-4 pt-14">
-            <p className="font-display text-[10px] uppercase tracking-[0.24em] text-brass-300">
-              Charakter
-            </p>
-            <p className="truncate font-display text-xl text-parchment-50">
-              {chapter.title}
-            </p>
+  if (chapter.kind !== "character") return null;
+  return (
+    <div className="hidden min-h-0 lg:block">
+      <div className="relative ml-auto aspect-[3/4] max-h-[56dvh] w-full max-w-[20rem] overflow-hidden rounded-md border border-brass-400/45 bg-ink-500/55 shadow-2xl">
+        {chapter.portraitUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={chapter.portraitUrl}
+            alt={chapter.title}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center bg-[linear-gradient(135deg,rgba(195,154,78,0.18),rgba(156,123,214,0.18))]">
+            <span className="font-display text-7xl uppercase text-brass-300/70">
+              {chapter.title.slice(0, 1)}
+            </span>
           </div>
+        )}
+        <div className="via-ink-600/82 absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink-600 to-transparent px-4 pb-4 pt-14">
+          <p className="font-display text-[10px] uppercase tracking-[0.24em] text-brass-300">
+            Charakter
+          </p>
+          <p className="truncate font-display text-xl text-parchment-50">
+            {chapter.title}
+          </p>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="hidden lg:block">
-      <div className="ml-auto w-full max-w-[20rem] border border-brass-700/45 bg-ink-600/45 p-4 shadow-2xl backdrop-blur-sm">
-        <p className="font-display text-[10px] uppercase tracking-[0.26em] text-brass-400">
-          Regie
-        </p>
-        <div className="mt-4 space-y-3">
-          <SignalLine label="Kamera" active={chapter.kind === "establishing"} />
-          <SignalLine label="Spannung" active={chapter.kind === "beat"} />
-          <SignalLine label="Entscheidung" active={chapter.kind === "mission"} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SignalLine({ label, active }: { label: string; active: boolean }) {
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="font-display text-[10px] uppercase tracking-[0.18em] text-ink-100">
-          {label}
-        </span>
-        <span
-          className={cn(
-            "h-2 w-2 rounded-full",
-            active ? "bg-brass-300 shadow-[0_0_18px_rgba(216,184,120,0.9)]" : "bg-ink-200/40",
-          )}
-        />
-      </div>
-      <div className="mt-1 h-px overflow-hidden bg-ink-200/20">
-        <motion.div
-          initial={{ width: active ? "12%" : "0%" }}
-          animate={{ width: active ? "100%" : "20%" }}
-          transition={{ duration: active ? 4.8 : 0.4, ease: "easeOut" }}
-          className={cn(
-            "h-full",
-            active ? "bg-brass-300" : "bg-ink-200/30",
-          )}
-        />
       </div>
     </div>
   );

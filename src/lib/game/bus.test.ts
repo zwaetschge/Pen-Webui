@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CLIENT_EVENT_TYPES } from "./events";
+import {
+  BOOTSTRAP_EVENT_TYPES,
+  CLIENT_EVENT_TYPES,
+  CURRENT_BOOTSTRAP_EVENT_TYPE,
+} from "./events";
 
 const db = vi.hoisted(() => ({
   create: vi.fn(),
@@ -79,7 +83,7 @@ describe("recentEvents", () => {
     db.findMany.mockResolvedValue([
       {
         id: "bootstrap_12",
-        type: "session_bootstrap_v12",
+        type: CURRENT_BOOTSTRAP_EVENT_TYPE,
         payload: { sceneTitle: "Opening" },
         scope: "all",
         ts: new Date("2026-06-02T10:00:00.000Z"),
@@ -91,15 +95,134 @@ describe("recentEvents", () => {
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          type: { in: expect.arrayContaining(["session_bootstrap_v12"]) },
+          type: { in: expect.arrayContaining([CURRENT_BOOTSTRAP_EVENT_TYPE]) },
         }),
       }),
     );
     expect(events).toEqual([
       expect.objectContaining({
         id: "bootstrap_12",
-        type: "session_bootstrap_v12",
+        type: CURRENT_BOOTSTRAP_EVENT_TYPE,
       }),
+    ]);
+  });
+
+  it("prepends the latest bootstrap when it has fallen out of the replay tail", async () => {
+    const { recentEvents } = await import("./bus");
+    db.findMany.mockResolvedValue([
+      {
+        id: "ev_202",
+        type: "narrate",
+        payload: { text: "latest" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:03:22.000Z"),
+      },
+      {
+        id: "ev_201",
+        type: "narrate",
+        payload: { text: "older" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:03:21.000Z"),
+      },
+    ]);
+    db.findFirst.mockResolvedValue({
+      id: "bootstrap_current",
+      type: CURRENT_BOOTSTRAP_EVENT_TYPE,
+      payload: { sceneTitle: "Auftakt" },
+      scope: "all",
+      ts: new Date("2026-06-02T10:00:00.000Z"),
+    });
+
+    const events = await recentEvents("sess_1");
+
+    expect(db.findFirst).toHaveBeenCalledWith({
+      where: {
+        sessionId: "sess_1",
+        type: { in: [...BOOTSTRAP_EVENT_TYPES] },
+      },
+      orderBy: [{ ts: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        type: true,
+        payload: true,
+        scope: true,
+        ts: true,
+      },
+    });
+    expect(events.map((event) => event.id)).toEqual([
+      "bootstrap_current",
+      "ev_201",
+      "ev_202",
+    ]);
+  });
+
+  it("backfills a retained legacy bootstrap for a running v12 session", async () => {
+    const { recentEvents } = await import("./bus");
+    db.findMany.mockResolvedValue([
+      {
+        id: "ev_latest",
+        type: "narrate",
+        payload: { text: "Aktuelle Szene" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:04:00.000Z"),
+      },
+    ]);
+    db.findFirst.mockResolvedValue({
+      id: "bootstrap_v12",
+      type: "session_bootstrap_v12",
+      payload: { sceneTitle: "Laufende Szene" },
+      scope: "all",
+      ts: new Date("2026-06-02T10:00:00.000Z"),
+    });
+
+    const events = await recentEvents("sess_1");
+
+    expect(events.map((event) => event.id)).toEqual([
+      "bootstrap_v12",
+      "ev_latest",
+    ]);
+  });
+
+  it("replays the latest scene anchor after bootstrap when both fell out of the tail", async () => {
+    const { recentEvents } = await import("./bus");
+    db.findMany.mockResolvedValue([
+      {
+        id: "ev_latest",
+        type: "narrate",
+        payload: { text: "Aktuelle Erzählung" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:04:00.000Z"),
+      },
+    ]);
+    db.findFirst
+      .mockResolvedValueOnce({
+        id: "bootstrap_v12",
+        type: "session_bootstrap_v12",
+        payload: { sceneTitle: "Auftakt" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:00:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        id: "scene_current",
+        type: "scene_set",
+        payload: { locationName: "Alte Mühle" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:02:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        id: "combat_closed",
+        type: "combat_ended",
+        payload: {},
+        scope: "all",
+        ts: new Date("2026-06-02T10:03:00.000Z"),
+      });
+
+    const events = await recentEvents("sess_1");
+
+    expect(events.map((event) => event.id)).toEqual([
+      "bootstrap_v12",
+      "scene_current",
+      "ev_latest",
     ]);
   });
 
@@ -119,12 +242,13 @@ describe("recentEvents", () => {
       where: { id: "ev_3", sessionId: "sess_1" },
       select: { id: true, ts: true },
     });
+    expect(db.findFirst).toHaveBeenCalledTimes(1);
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           sessionId: "sess_1",
           type: { in: CLIENT_EVENT_TYPES },
-          ts: { gte: cursorTs },
+          OR: [{ ts: { gt: cursorTs } }, { ts: cursorTs, id: { gt: "ev_3" } }],
         },
         orderBy: [{ ts: "asc" }, { id: "asc" }],
         take: 500,
@@ -171,8 +295,11 @@ describe("recentEvents", () => {
     );
   });
 
-  it("bounds a publish command after persisting the canonical event", async () => {
+  it("keeps the durable event when a bounded live publish times out", async () => {
     vi.useFakeTimers();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     db.create.mockResolvedValue({
       id: "ev_hung",
       ts: new Date("2026-06-02T10:00:00.000Z"),
@@ -182,16 +309,63 @@ describe("recentEvents", () => {
 
     try {
       const publishing = publishEvent("sess_1", "narrate", { text: "saved" });
-      const rejection = expect(publishing).rejects.toThrow(
-        "Redis publish timed out",
-      );
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(10_000);
 
-      await rejection;
+      await expect(publishing).resolves.toMatchObject({ id: "ev_hung" });
       expect(db.create).toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Game event persisted but live broadcast failed",
+        expect.objectContaining({
+          sessionId: "sess_1",
+          eventId: "ev_hung",
+          type: "narrate",
+        }),
+      );
     } finally {
+      consoleError.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("reuses and rebroadcasts a deterministic event after an ambiguous retry", async () => {
+    db.create.mockRejectedValue({ code: "P2002" });
+    db.findFirst.mockResolvedValue({
+      id: "pending_queued_1",
+      type: "player_input",
+      payload: { text: "already saved" },
+      scope: "all",
+      ts: new Date("2026-06-02T10:00:00.000Z"),
+    });
+    redisClient.status = "ready";
+    redisClient.publish.mockResolvedValue(1);
+    const { publishEvent } = await import("./bus");
+
+    await expect(
+      publishEvent(
+        "sess_1",
+        "player_input",
+        { text: "retry" },
+        { eventId: "pending_queued_1" },
+      ),
+    ).resolves.toMatchObject({
+      id: "pending_queued_1",
+      payload: { text: "already saved" },
+    });
+    expect(db.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "pending_queued_1",
+        sessionId: "sess_1",
+        type: "player_input",
+      },
+      select: {
+        id: true,
+        type: true,
+        payload: true,
+        scope: true,
+        ts: true,
+      },
+    });
+    expect(redisClient.publish).toHaveBeenCalledOnce();
   });
 });

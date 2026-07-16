@@ -300,7 +300,7 @@ export async function commitBlueprint(opts: {
       campaignId: campaign.id,
       order: 1,
       type: "intro",
-      title: "Opening",
+      title: "Auftakt",
       payload: {
         locationId: openingLoc ?? null,
         summary: bp.openingScene.summary,

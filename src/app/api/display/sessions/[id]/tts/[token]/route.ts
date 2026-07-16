@@ -1,0 +1,13 @@
+import { handleSessionTts } from "@/lib/tts/session-api";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 120;
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string; token: string }> },
+) {
+  const { id, token } = await params;
+  return handleSessionTts(request, id, null, token);
+}

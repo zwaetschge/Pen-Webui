@@ -767,6 +767,48 @@ describe("game store event ingestion", () => {
     expect(useGame.getState().tokens.goblin.hp).toBe(2);
   });
 
+  it("applies paired revival and healing events exactly once", () => {
+    useGame.getState().ingest(
+      event({
+        id: "revive-combat",
+        type: "combat_started",
+        payload: {
+          encounterId: "enc_revive",
+          initiative: [{ name: "Robert", roll: 12, refId: "hero" }],
+          tokens: [
+            {
+              id: "hero",
+              name: "Robert",
+              x: 1,
+              y: 1,
+              hp: 0,
+              maxHp: 10,
+              team: "player",
+              statuses: [{ condition: "unconscious" }],
+            },
+          ],
+        },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "revived",
+        type: "character_revived",
+        payload: { tokenId: "hero", hp: 7 },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "healed",
+        type: "healing_applied",
+        payload: { targetId: "hero", amount: 7 },
+      }),
+    );
+
+    expect(useGame.getState().tokens.hero.hp).toBe(7);
+    expect(useGame.getState().tokens.hero.statuses).toEqual([]);
+  });
+
   it("keeps a visible game-over state for combat defeat", () => {
     useGame.getState().ingest(
       event({

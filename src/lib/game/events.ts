@@ -2,7 +2,13 @@ import type { GameEvent } from "./bus";
 
 export type ClientRole = "host" | "player";
 
-export const CURRENT_BOOTSTRAP_EVENT_TYPE = "session_bootstrap_v12";
+export type ClientAudience = {
+  role: ClientRole;
+  characterId?: string | null;
+  display?: boolean;
+};
+
+export const CURRENT_BOOTSTRAP_EVENT_TYPE = "session_bootstrap_v13";
 
 export const BOOTSTRAP_EVENT_TYPES = [
   "session_bootstrap",
@@ -16,6 +22,7 @@ export const BOOTSTRAP_EVENT_TYPES = [
   "session_bootstrap_v9",
   "session_bootstrap_v10",
   "session_bootstrap_v11",
+  "session_bootstrap_v12",
   CURRENT_BOOTSTRAP_EVENT_TYPE,
 ] as const;
 
@@ -43,6 +50,7 @@ export const CLIENT_EVENT_TYPES = [
   "combat_started",
   "combat_action_used",
   "attack_resolved",
+  "saving_throw_resolved",
   "combat_turn_set",
   "combat_turn_ended",
   "combat_ended",
@@ -62,12 +70,45 @@ export const CLIENT_EVENT_TYPES = [
   "dm_error",
   "dm_thinking",
   "world_state_updated",
+  "ability_used",
+  "resource_spent",
+  "resource_restored",
+  "healing_applied",
+  "status_updated",
+  "concentration_changed",
+  "reaction_opened",
+  "reaction_resolved",
+  "character_stabilized",
+  "character_revived",
+  "action_planned",
+  "turn_group_set",
+  "turn_member_completed",
+  "surface_changed",
+  "object_changed",
+  "token_forced_moved",
+  "stealth_changed",
+  "token_revealed",
+  "private_clue",
+  "ai_intent",
+  "encounter_objective_updated",
+  "inventory_changed",
+  "equipment_changed",
+  "rest_proposed",
+  "rest_vote_cast",
+  "rest_completed",
+  "dialogue_opened",
+  "dialogue_vote_cast",
+  "dialogue_resolved",
+  "quest_updated",
+  "decision_recorded",
+  "reputation_changed",
 ] as const;
 
 const CLIENT_EVENT_TYPE_SET = new Set<string>(CLIENT_EVENT_TYPES);
 
 const PLAYER_HIDDEN_ROLL_PAYLOAD = {
   notation: "verdeckter Wurf",
+  total: undefined,
   breakdown: "",
   reason: undefined,
   rolls: undefined,
@@ -76,10 +117,25 @@ const PLAYER_HIDDEN_ROLL_PAYLOAD = {
 
 export function eventForClient(
   ev: GameEvent,
-  role: ClientRole,
+  audienceInput: ClientRole | ClientAudience,
 ): GameEvent | null {
+  const audience =
+    typeof audienceInput === "string"
+      ? { role: audienceInput, characterId: null, display: false }
+      : audienceInput;
+  const role = audience.role;
   if (!CLIENT_EVENT_TYPE_SET.has(ev.type)) return null;
   if (ev.scope === "dm" && role !== "host") return null;
+  if (ev.scope === "display" && !audience.display && role !== "host") {
+    return null;
+  }
+  if (ev.scope?.startsWith("character:")) {
+    if (audience.display) return null;
+    const targetCharacterId = ev.scope.slice("character:".length);
+    if (role !== "host" && audience.characterId !== targetCharacterId) {
+      return null;
+    }
+  }
   if (role !== "host" && ev.type === "world_state_updated") return null;
 
   if (ev.type === "dice_roll" && role !== "host" && ev.payload.hidden) {
@@ -121,9 +177,7 @@ export function eventForClient(
 }
 
 function publicDmTurnFence(value: unknown): number | null {
-  return typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
 }

@@ -64,9 +64,127 @@ describe("session bootstrap intro", () => {
     });
 
     expect(intro.establishingShot).toBe(
-      "Die Kamera findet euch in Cypress Hollow. Cypress Hollow liegt unter einem bleigrauen Nachmittag.",
+      "Ihr befindet euch in Cypress Hollow. Cypress Hollow liegt unter einem bleigrauen Nachmittag.",
     );
     expect(intro.establishingShot).not.toContain("Beschreibe");
+  });
+
+  it("filters prefixed writing directions from beat titles and narration", () => {
+    const intro = buildIntroSequence({
+      sceneTitle: "Opening",
+      introPlan: {
+        establishingShot:
+          "Für den Auftakt: Beschreibe Cypress Hollow im kalten Regen.",
+        setupBeats: [
+          {
+            title: "Für den Auftakt: Beschreibe den ersten Verdacht",
+            text: "Elinor Hale mustert die Fremden.",
+          },
+          {
+            title: "Blicke im Diner",
+            text: "Regie: Zeige, wie Elinor Hale die Fremden mustert.",
+          },
+          {
+            title: "Der erste Verdacht",
+            text: "Der DM zeigt, wie ein Schatten an der Hintertür vorbeizieht.",
+          },
+          {
+            title: "Die verschlossene Tür",
+            text: "Hinter der Küche fällt ein schwerer Riegel ins Schloss.",
+          },
+        ],
+        characterHookStyle: null,
+        objective: null,
+        stakes: null,
+        firstPrompt:
+          "Für den Auftakt: Beschreibe, wie die Gruppe ihre erste Entscheidung trifft.",
+      },
+      brief: {
+        objective: "Prueft Noras Camper.",
+        whyHere: "Eine anonyme Nachricht fuehrt euch nach Cypress Hollow.",
+        stakes: "Roman erreicht den Camper zuerst, wenn ihr zoegert.",
+        nextActions: ["Elinor befragen."],
+      },
+      locationName: "Cypress Hollow",
+      locationDescription:
+        "Regen glaenzt auf den Veranden, waehrend das Diner fast leer bleibt.",
+      presentNpcNames: ["Elinor Hale"],
+      characters: [],
+    });
+
+    expect(intro.establishingShot).toBe(
+      "Ihr befindet euch in Cypress Hollow. Regen glaenzt auf den Veranden, waehrend das Diner fast leer bleibt.",
+    );
+    expect(intro.setupBeats).toContainEqual({
+      title: "Die verschlossene Tür",
+      text: "Hinter der Küche fällt ein schwerer Riegel ins Schloss.",
+    });
+    for (const beat of intro.setupBeats) {
+      expect(beat.title).not.toMatch(/Beschreibe|Regie|\bDM\b/iu);
+      expect(beat.text).not.toMatch(/Beschreibe|Regie|\bDM\b/iu);
+    }
+    expect(intro.firstPrompt).not.toMatch(/Für den Auftakt|Beschreibe/iu);
+  });
+
+  it("keeps three complete planned beats without artificial filler", () => {
+    const plannedBeats = [
+      { title: "Der leere Tisch", text: "Vier Tassen stehen unberührt da." },
+      { title: "Ein fremder Wagen", text: "Vor dem Diner läuft ein Motor." },
+      { title: "Das Klopfen", text: "Dreimal klopft es an der Hintertür." },
+    ];
+    const intro = buildIntroSequence({
+      sceneTitle: "Auftakt",
+      introPlan: {
+        establishingShot: "Regen liegt über Cypress Hollow.",
+        setupBeats: plannedBeats,
+        characterHookStyle: null,
+        objective: null,
+        stakes: null,
+        firstPrompt: null,
+      },
+      brief: {
+        objective: "Öffnet die Hintertür.",
+        whyHere: "Eine Nachricht führt euch hierher.",
+        stakes: "Die Spur verschwindet.",
+        nextActions: [],
+      },
+      locationName: "Cypress Hollow",
+      locationDescription: "Das Diner liegt im Regen.",
+      presentNpcNames: ["Elinor Hale"],
+      characters: [],
+    });
+
+    expect(intro.setupBeats).toEqual(plannedBeats);
+  });
+
+  it("uses distinct natural titles for generated fallback beats", () => {
+    const intro = buildIntroSequence({
+      sceneTitle: "Auftakt",
+      introPlan: {
+        establishingShot: null,
+        setupBeats: [],
+        characterHookStyle: null,
+        objective: null,
+        stakes: null,
+        firstPrompt: null,
+      },
+      brief: {
+        objective: "Findet die vermisste Person.",
+        whyHere: "Eine anonyme Nachricht führt euch zum Diner.",
+        stakes: "Die Spur erkaltet noch vor Einbruch der Nacht.",
+        nextActions: [],
+      },
+      locationName: "Cypress Hollow",
+      locationDescription: "Das Diner ist hell, aber fast leer.",
+      presentNpcNames: ["Elinor Hale"],
+      characters: [],
+    });
+
+    expect(intro.setupBeats).toHaveLength(3);
+    expect(new Set(intro.setupBeats.map((beat) => beat.title)).size).toBe(3);
+    expect(intro.setupBeats.map((beat) => beat.title)).not.toContain(
+      "Ein neuer Moment",
+    );
   });
 
   it("does not show worldbuilding directions as objective or stakes", () => {

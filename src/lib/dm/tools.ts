@@ -23,6 +23,14 @@ import { resolvePregeneratedAsset } from "../asset/pregenerated";
 import { DEFAULT_TOKEN_MOVEMENT } from "../game/movement";
 import { narrationStyleRejection } from "./narration-style";
 import { GERMAN_STYLE_CONTRACT } from "./prompts";
+import {
+  loadPartyContext,
+  partyStateForContext,
+  persistPartyState,
+  publishPartyEvent,
+} from "../game/gameplay-api";
+import { reducePartyState, type PartyCommand } from "../game/rules/party";
+import { withSessionMutation } from "../game/session-mutation";
 
 export type ToolEvent = {
   type: string;
@@ -101,9 +109,135 @@ const updateWorldStateArgs = z.object({
   }),
 });
 
+const managePartyArgs = z.object({
+  action: z.enum([
+    "grant_loot",
+    "upsert_quest",
+    "update_quest",
+    "open_dialogue",
+    "resolve_dialogue",
+    "adjust_reputation",
+    "set_flag",
+  ]),
+  holderId: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        quantity: z.number().int().min(1).default(1),
+        equippableSlots: z.array(z.string()).default([]),
+        usable: z.boolean().default(false),
+        useEffect: z
+          .object({
+            resourceId: z.string().min(1),
+            amount: z.number().int().min(1),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+  quest: z
+    .object({
+      id: z.string(),
+      title: z.string(),
+      description: z.string().optional(),
+      status: z.enum(["inactive", "active", "completed", "failed"]),
+      objectives: z.array(
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          status: z.enum(["pending", "active", "completed", "failed"]),
+          progress: z.number().int().min(0).default(0),
+          target: z.number().int().min(1).default(1),
+          optional: z.boolean().default(false),
+        }),
+      ),
+    })
+    .optional(),
+  questId: z.string().optional(),
+  questStatus: z.enum(["inactive", "active", "completed", "failed"]).optional(),
+  objectiveId: z.string().optional(),
+  objectiveStatus: z
+    .enum(["pending", "active", "completed", "failed"])
+    .optional(),
+  progress: z.number().int().min(0).optional(),
+  decision: z
+    .object({
+      id: z.string(),
+      prompt: z.string(),
+      participantIds: z.array(z.string()).min(1),
+      speakerId: z.string(),
+      resolutionMode: z.enum(["speaker", "majority"]).default("majority"),
+      options: z.array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          effects: z.array(z.record(z.unknown())).default([]),
+        }),
+      ),
+    })
+    .optional(),
+  decisionId: z.string().optional(),
+  optionId: z.string().optional(),
+  memberId: z.string().optional(),
+  checkOutcome: z
+    .enum(["critical_failure", "failure", "success", "critical_success"])
+    .optional(),
+  factionId: z.string().optional(),
+  amount: z.number().int().optional(),
+  flagKey: z.string().optional(),
+  flagValue: z
+    .union([z.string(), z.number(), z.boolean(), z.null()])
+    .optional(),
+});
+
 const startCombatArgs = z.object({
   name: z.string(),
   locationId: z.string().optional(),
+  objective: z.string().min(3).optional(),
+  surfaces: z
+    .array(
+      z.object({
+        x: z.number().int().min(0).max(15),
+        y: z.number().int().min(0).max(15),
+        type: z.enum(["fire", "water", "ice", "lightning"]),
+        intensity: z.number().int().min(1).max(3).default(1),
+        duration: z.number().int().min(1).nullable().default(null),
+      }),
+    )
+    .default([]),
+  objects: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        kind: z.enum(["door", "barrel", "trap", "destructible"]),
+        state: z.enum([
+          "open",
+          "closed",
+          "locked",
+          "intact",
+          "armed",
+          "disarmed",
+          "triggered",
+          "destroyed",
+        ]),
+        x: z.number().int().min(0).max(15),
+        y: z.number().int().min(0).max(15),
+        hp: z.number().int().min(0).default(10),
+        maxHp: z.number().int().min(1).default(10),
+        blocksMovement: z.boolean().default(false),
+        blocksSight: z.boolean().default(false),
+        armorClass: z.number().int().min(1).max(30).default(10),
+        content: z.enum(["oil", "water", "volatile", "empty"]).optional(),
+        detected: z.boolean().optional(),
+        disarmDC: z.number().int().min(1).max(40).optional(),
+        trapDamage: z.number().int().min(0).optional(),
+        trapDamageType: z.string().optional(),
+        trapCondition: z.string().optional(),
+      }),
+    )
+    .default([]),
   participants: z.array(
     z.object({
       kind: z.enum(["npc", "character", "monster"]),
@@ -333,6 +467,140 @@ const updateWorldStateHandler: ToolHandler = async (ctx, raw) => {
   return "World state updated.";
 };
 
+const managePartyHandler: ToolHandler = async (ctx, raw) => {
+  const input = managePartyArgs.parse(raw);
+  return withSessionMutation(ctx.sessionId, async () => {
+    const context = await loadPartyContext(ctx.sessionId);
+    if (!context || context.endedAt) return "The session is not active.";
+    const state = partyStateForContext(context);
+    const commandId = `dm:${input.action}:${Date.now()}`;
+    let command: PartyCommand;
+
+    if (input.action === "grant_loot") {
+      if (!input.items?.length) return "grant_loot requires at least one item.";
+      command = {
+        type: "inventory.loot",
+        commandId,
+        holderId: input.holderId ?? "party",
+        items: input.items.map((item, index) => ({
+          instanceId: `${commandId}:item:${index}`,
+          definitionId: toolSlug(item.name),
+          name: item.name,
+          quantity: item.quantity,
+          maxStack: 99,
+          equippableSlots: item.equippableSlots,
+          usable: item.usable,
+          ...(item.useEffect
+            ? {
+                useEffect: {
+                  type: "restore_resource" as const,
+                  resourceId: item.useEffect.resourceId,
+                  amount: item.useEffect.amount,
+                },
+              }
+            : {}),
+        })),
+      };
+    } else if (input.action === "upsert_quest") {
+      if (!input.quest) return "upsert_quest requires quest.";
+      command = {
+        type: "quest.upsert",
+        commandId,
+        quest: {
+          id: input.quest.id,
+          title: input.quest.title,
+          description: input.quest.description,
+          status: input.quest.status,
+          objectiveOrder: input.quest.objectives.map(
+            (objective) => objective.id,
+          ),
+          objectives: Object.fromEntries(
+            input.quest.objectives.map((objective) => [
+              objective.id,
+              { ...objective },
+            ]),
+          ),
+        },
+      };
+    } else if (input.action === "update_quest") {
+      if (!input.questId) return "update_quest requires questId.";
+      command = input.objectiveId
+        ? {
+            type: "quest.setObjective",
+            commandId,
+            questId: input.questId,
+            objectiveId: input.objectiveId,
+            status: input.objectiveStatus,
+            progress: input.progress,
+          }
+        : {
+            type: "quest.setStatus",
+            commandId,
+            questId: input.questId,
+            status: input.questStatus ?? "active",
+          };
+    } else if (input.action === "open_dialogue") {
+      if (!input.decision) return "open_dialogue requires decision.";
+      command = {
+        type: "dialogue.open",
+        commandId,
+        decision: input.decision as Extract<
+          PartyCommand,
+          { type: "dialogue.open" }
+        >["decision"],
+      };
+    } else if (input.action === "resolve_dialogue") {
+      if (!input.decisionId || !input.memberId) {
+        return "resolve_dialogue requires decisionId and memberId.";
+      }
+      command = {
+        type: "dialogue.resolve",
+        commandId,
+        decisionId: input.decisionId,
+        memberId: input.memberId,
+        optionId: input.optionId,
+        checkOutcome: input.checkOutcome,
+      };
+    } else if (input.action === "adjust_reputation") {
+      if (!input.factionId || input.amount === undefined) {
+        return "adjust_reputation requires factionId and amount.";
+      }
+      command = {
+        type: "reputation.adjust",
+        commandId,
+        factionId: input.factionId,
+        amount: input.amount,
+      };
+    } else {
+      if (!input.flagKey || input.flagValue === undefined) {
+        return "set_flag requires flagKey and flagValue.";
+      }
+      command = {
+        type: "flag.set",
+        commandId,
+        key: input.flagKey,
+        value: input.flagValue,
+      };
+    }
+
+    const result = reducePartyState(state, command);
+    if (!result.ok) return `Party update rejected: ${result.error.message}`;
+    await persistPartyState(context, result.state);
+    const access = {
+      role: "host" as const,
+      sessionId: ctx.sessionId,
+      campaignId: ctx.campaignId,
+      userId: ctx.userId,
+      displayName: "Codex DM",
+      memberId: `dm:${ctx.userId}`,
+    };
+    for (const event of result.events) {
+      await publishPartyEvent(ctx.sessionId, event, result.state, access);
+    }
+    return `Party gameplay updated (${input.action}, revision ${result.state.revision}).`;
+  });
+};
+
 const startCombatHandler: ToolHandler = async (ctx, raw) => {
   const a = startCombatArgs.parse(raw);
   const initiative = a.participants
@@ -352,6 +620,27 @@ const startCombatHandler: ToolHandler = async (ctx, raw) => {
       status: "active",
       activeTurn: 0,
       round: 1,
+      runtime: {
+        version: 1,
+        turnGroup: null,
+        plans: {},
+        reaction: null,
+        statuses: {},
+        surfaces: a.surfaces,
+        objects: a.objects,
+        visibility: {},
+        objectives: a.objective
+          ? [
+              {
+                id: "primary",
+                label: a.objective,
+                progress: 0,
+                target: 1,
+                status: "active",
+              },
+            ]
+          : [],
+      } as never,
     },
   });
 
@@ -409,8 +698,49 @@ const startCombatHandler: ToolHandler = async (ctx, raw) => {
       name: a.name,
       initiative,
       tokens,
+      surfaces: a.surfaces,
+      objects: a.objects,
+      objectives: a.objective
+        ? [
+            {
+              id: "primary",
+              label: a.objective,
+              progress: 0,
+              target: 1,
+              status: "active",
+            },
+          ]
+        : [],
     },
   });
+  const playerGroup = initiative
+    .slice(
+      0,
+      initiative.findIndex((entry) => entry.kind !== "character") < 0
+        ? initiative.length
+        : initiative.findIndex((entry) => entry.kind !== "character"),
+    )
+    .flatMap((entry) => {
+      const token = tokens.find(
+        (candidate) =>
+          candidate.id === entry.refId || candidate.name === entry.name,
+      );
+      return token ? [token.id] : [];
+    });
+  if (playerGroup.length > 0) {
+    await ctx.emit({
+      type: "turn_group_set",
+      payload: {
+        encounterId: encounter.id,
+        team: "player",
+        tokenIds: playerGroup,
+        completedTokenIds: [],
+        round: 1,
+        startIndex: 0,
+        endIndex: playerGroup.length - 1,
+      },
+    });
+  }
   return `Combat "${a.name}" started.  Initiative order:\n${initiative
     .map((p, i) => `  ${i + 1}. ${p.name} — ${p.roll}`)
     .join("\n")}`;
@@ -824,6 +1154,171 @@ export const dmTools: Record<
     run: updateWorldStateHandler,
   },
 
+  manage_party: {
+    definition: {
+      type: "function",
+      function: {
+        name: "manage_party",
+        description:
+          "Update deterministic party gameplay: grant loot, create/update quests, open/resolve cooperative dialogue votes, record flags, or adjust reputation. Use this whenever narration changes party-owned state.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            action: {
+              type: "string",
+              enum: [
+                "grant_loot",
+                "upsert_quest",
+                "update_quest",
+                "open_dialogue",
+                "resolve_dialogue",
+                "adjust_reputation",
+                "set_flag",
+              ],
+            },
+            holderId: { type: "string" },
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  name: { type: "string" },
+                  quantity: { type: "integer", minimum: 1 },
+                  equippableSlots: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                  usable: { type: "boolean" },
+                  useEffect: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      resourceId: { type: "string" },
+                      amount: { type: "integer", minimum: 1 },
+                    },
+                    required: ["resourceId", "amount"],
+                  },
+                },
+                required: ["name"],
+              },
+            },
+            quest: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                description: { type: "string" },
+                status: {
+                  type: "string",
+                  enum: ["inactive", "active", "completed", "failed"],
+                },
+                objectives: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      id: { type: "string" },
+                      title: { type: "string" },
+                      status: {
+                        type: "string",
+                        enum: ["pending", "active", "completed", "failed"],
+                      },
+                      progress: { type: "integer", minimum: 0 },
+                      target: { type: "integer", minimum: 1 },
+                      optional: { type: "boolean" },
+                    },
+                    required: ["id", "title", "status"],
+                  },
+                },
+              },
+              required: ["id", "title", "status", "objectives"],
+            },
+            questId: { type: "string" },
+            questStatus: {
+              type: "string",
+              enum: ["inactive", "active", "completed", "failed"],
+            },
+            objectiveId: { type: "string" },
+            objectiveStatus: {
+              type: "string",
+              enum: ["pending", "active", "completed", "failed"],
+            },
+            progress: { type: "integer", minimum: 0 },
+            decision: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                prompt: { type: "string" },
+                participantIds: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                speakerId: { type: "string" },
+                resolutionMode: {
+                  type: "string",
+                  enum: ["speaker", "majority"],
+                },
+                options: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      id: { type: "string" },
+                      label: { type: "string" },
+                      effects: {
+                        type: "array",
+                        items: { type: "object" },
+                      },
+                    },
+                    required: ["id", "label"],
+                  },
+                },
+              },
+              required: [
+                "id",
+                "prompt",
+                "participantIds",
+                "speakerId",
+                "options",
+              ],
+            },
+            decisionId: { type: "string" },
+            optionId: { type: "string" },
+            memberId: { type: "string" },
+            checkOutcome: {
+              type: "string",
+              enum: [
+                "critical_failure",
+                "failure",
+                "success",
+                "critical_success",
+              ],
+            },
+            factionId: { type: "string" },
+            amount: { type: "integer" },
+            flagKey: { type: "string" },
+            flagValue: {
+              anyOf: [
+                { type: "string" },
+                { type: "number" },
+                { type: "boolean" },
+                { type: "null" },
+              ],
+            },
+          },
+          required: ["action"],
+        },
+      },
+    },
+    run: managePartyHandler,
+  },
+
   start_combat: {
     definition: {
       type: "function",
@@ -837,6 +1332,80 @@ export const dmTools: Record<
           properties: {
             name: { type: "string" },
             locationId: { type: "string" },
+            objective: {
+              type: "string",
+              description:
+                "Concrete win or scene objective shown on the big screen.",
+            },
+            surfaces: {
+              type: "array",
+              description:
+                "Useful elemental surfaces already present on the map.",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  x: { type: "integer", minimum: 0, maximum: 15 },
+                  y: { type: "integer", minimum: 0, maximum: 15 },
+                  type: {
+                    type: "string",
+                    enum: ["fire", "water", "ice", "lightning"],
+                  },
+                  intensity: { type: "integer", minimum: 1, maximum: 3 },
+                  duration: {
+                    anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+                  },
+                },
+                required: ["x", "y", "type"],
+              },
+            },
+            objects: {
+              type: "array",
+              description:
+                "Doors, barrels, traps, and destructibles that create tactical choices.",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  id: { type: "string" },
+                  name: { type: "string" },
+                  kind: {
+                    type: "string",
+                    enum: ["door", "barrel", "trap", "destructible"],
+                  },
+                  state: {
+                    type: "string",
+                    enum: [
+                      "open",
+                      "closed",
+                      "locked",
+                      "intact",
+                      "armed",
+                      "disarmed",
+                      "triggered",
+                      "destroyed",
+                    ],
+                  },
+                  x: { type: "integer", minimum: 0, maximum: 15 },
+                  y: { type: "integer", minimum: 0, maximum: 15 },
+                  hp: { type: "integer", minimum: 0 },
+                  maxHp: { type: "integer", minimum: 1 },
+                  blocksMovement: { type: "boolean" },
+                  blocksSight: { type: "boolean" },
+                  armorClass: { type: "integer", minimum: 1, maximum: 30 },
+                  content: {
+                    type: "string",
+                    enum: ["oil", "water", "volatile", "empty"],
+                  },
+                  detected: { type: "boolean" },
+                  disarmDC: { type: "integer", minimum: 1, maximum: 40 },
+                  trapDamage: { type: "integer", minimum: 0 },
+                  trapDamageType: { type: "string" },
+                  trapCondition: { type: "string" },
+                },
+                required: ["id", "name", "kind", "state", "x", "y"],
+              },
+            },
             participants: {
               type: "array",
               items: {
@@ -1140,4 +1709,15 @@ export async function runToolCall(
 
 function normalizeName(value: string) {
   return value.trim().toLowerCase();
+}
+
+function toolSlug(value: string) {
+  return (
+    value
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "item"
+  );
 }

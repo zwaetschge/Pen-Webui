@@ -8,7 +8,13 @@ import { cn } from "@/lib/cn";
 import { AudioLineButton } from "./AudioLineButton";
 import { useTtsPlayback } from "./TtsProvider";
 
-export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean }) {
+export function CinematicView({
+  audioEnabled = true,
+  displayMode = false,
+}: {
+  audioEnabled?: boolean;
+  displayMode?: boolean;
+}) {
   const scene = useGame((s) => s.scene);
   const chat = useGame((s) => s.chat);
   const dialogue = latestDialoguePresentation(chat, scene);
@@ -16,6 +22,7 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
   const dialogueKind = dialogue?.kind ?? null;
   const lastAutoplayDialogueIdRef = useRef<string | null>(null);
   const { autoplay, play, setAutoplay } = useTtsPlayback();
+  const audioControls = showCinematicAudioControls(audioEnabled, displayMode);
   const portraitUrl =
     dialogue?.portraitUrl ??
     (dialogue?.kind === "npc" ? scene.activeNpc?.portraitUrl : null);
@@ -47,7 +54,13 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
   }, [audioEnabled, autoplay, dialogueId, dialogueKind, play]);
 
   return (
-    <div className="scene-stage relative h-full w-full overflow-hidden bg-ink-600">
+    <div
+      className={cn(
+        "scene-stage relative h-full w-full overflow-hidden bg-ink-600",
+        displayMode && "scene-stage-display",
+      )}
+    >
+      <div className={cinematicFallbackClassName(displayMode)} />
       <AnimatePresence>
         {scene.backgroundUrl ? (
           <motion.div
@@ -63,9 +76,7 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
               backgroundPosition: "center",
             }}
           />
-        ) : (
-          <div className="absolute inset-0 scene-felt bg-gradient-to-b from-ink-500 via-ink-600 to-ink-500" />
-        )}
+        ) : null}
       </AnimatePresence>
 
       <div className="absolute inset-0 bg-gradient-to-t from-ink-600 via-ink-600/40 to-transparent" />
@@ -73,7 +84,7 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
       <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-ink-600/70 to-transparent" />
 
       {scene.locationName ? (
-        <div className="scene-location-card absolute left-4 top-4 max-w-[calc(100%-2rem)] sm:left-6 sm:top-6 sm:max-w-md">
+        <div className={cinematicLocationClassName(displayMode)}>
           <p className="font-display text-[10px] uppercase tracking-[0.34em] text-brass-300/80">
             Ort
           </p>
@@ -130,9 +141,9 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
             transition={{ duration: 0.32 }}
             className="absolute inset-x-3 bottom-3 top-3 z-20 flex items-end sm:inset-x-6 sm:bottom-5 sm:top-5"
           >
-            <div className="renpy-dialogue-box mx-auto max-h-full max-w-[82rem] overflow-y-auto px-4 pb-4 pt-5 shadow-2xl backdrop-blur sm:px-6 sm:pb-5 sm:pt-6 lg:max-h-[42vh]">
+            <div className={cinematicDialogueBoxClassName(displayMode)}>
               <div className="renpy-nameplate absolute -top-3 left-4 right-4 flex items-center gap-2 px-2 py-1.5 sm:left-6 sm:right-6">
-                {audioEnabled ? (
+                {audioControls ? (
                   <AudioLineButton eventId={dialogue.id} compact />
                 ) : null}
                 <div className="flex min-w-0 items-baseline gap-2 overflow-hidden">
@@ -145,12 +156,16 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
                     </span>
                   ) : null}
                 </div>
-                {audioEnabled && dialogue.kind !== "player" ? (
+                {audioControls && dialogue.kind !== "player" ? (
                   <button
                     type="button"
                     aria-pressed={autoplay}
-                    aria-label={autoplay ? "Autoplay aktiviert" : "Autoplay deaktiviert"}
-                    title={autoplay ? "Autoplay aktiviert" : "Autoplay deaktiviert"}
+                    aria-label={
+                      autoplay ? "Autoplay aktiviert" : "Autoplay deaktiviert"
+                    }
+                    title={
+                      autoplay ? "Autoplay aktiviert" : "Autoplay deaktiviert"
+                    }
                     onClick={() => setAutoplay(!autoplay)}
                     className={cn(
                       "ml-auto shrink-0 rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]",
@@ -164,9 +179,9 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
                 ) : null}
               </div>
               <p
-                className={cn(
-                  "font-serif text-lg leading-relaxed text-parchment-100 sm:text-xl",
-                  dialogue.kind === "narrator" && "italic text-ink-50",
+                className={cinematicDialogueTextClassName(
+                  displayMode,
+                  dialogue.kind,
                 )}
               >
                 {dialogue.text}
@@ -176,5 +191,50 @@ export function CinematicView({ audioEnabled = true }: { audioEnabled?: boolean 
         ) : null}
       </AnimatePresence>
     </div>
+  );
+}
+
+export function showCinematicAudioControls(
+  audioEnabled: boolean,
+  displayMode: boolean,
+) {
+  return audioEnabled && !displayMode;
+}
+
+export function cinematicLocationClassName(displayMode: boolean) {
+  return cn(
+    "scene-location-card absolute",
+    displayMode
+      ? "display-location-card"
+      : "left-4 top-4 max-w-[calc(100%-2rem)] sm:left-6 sm:top-6 sm:max-w-md",
+  );
+}
+
+export function cinematicFallbackClassName(displayMode: boolean) {
+  return cn(
+    "scene-felt absolute inset-0 bg-gradient-to-b from-ink-500 via-ink-600 to-ink-500",
+    displayMode && "display-scene-fallback",
+  );
+}
+
+export function cinematicDialogueBoxClassName(displayMode: boolean) {
+  return cn(
+    "renpy-dialogue-box mx-auto max-h-full overflow-y-auto shadow-2xl backdrop-blur lg:max-h-[42vh]",
+    displayMode
+      ? "display-dialogue-box"
+      : "max-w-[82rem] px-4 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6",
+  );
+}
+
+export function cinematicDialogueTextClassName(
+  displayMode: boolean,
+  dialogueKind?: string,
+) {
+  return cn(
+    "font-serif text-parchment-100",
+    displayMode
+      ? "display-dialogue-text"
+      : "text-lg leading-relaxed sm:text-xl",
+    dialogueKind === "narrator" && "italic text-ink-50",
   );
 }
