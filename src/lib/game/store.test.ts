@@ -327,6 +327,119 @@ describe("game store event ingestion", () => {
     );
   });
 
+  it("switches presentation only for NPC dialogue and explicit cutscenes", () => {
+    useGame.getState().ingest(
+      event({
+        id: "npc_line",
+        type: "narrate",
+        payload: {
+          text: "Bleibt, wo ihr seid.",
+          speakerNpcId: "npc_elara",
+          speakerName: "Elara",
+        },
+      }),
+    );
+
+    expect(useGame.getState().scene.presentation).toMatchObject({
+      mode: "dialogue",
+      eventId: "npc_line",
+    });
+
+    useGame.getState().ingest(
+      event({
+        id: "player_reply",
+        type: "player_input",
+        payload: { text: "Warum?", displayName: "Robert" },
+      }),
+    );
+    expect(useGame.getState().scene.presentation?.mode).toBe("dialogue");
+
+    useGame.getState().ingest(
+      event({
+        id: "world_reply",
+        type: "narrate",
+        payload: { text: "Die Tür hinter Elara fällt ins Schloss." },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toBeNull();
+
+    useGame.getState().ingest(
+      event({
+        id: "reveal",
+        type: "narrate",
+        payload: {
+          text: "Über dem Tal öffnet sich der Himmel.",
+          presentation: "cutscene",
+        },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toMatchObject({
+      mode: "cutscene",
+      eventId: "reveal",
+    });
+  });
+
+  it("returns cinematic presentation to the map for combat and scene changes", () => {
+    useGame.getState().ingest(
+      event({
+        id: "cutscene",
+        type: "narrate",
+        payload: { text: "Die Brücke bricht.", presentation: "cutscene" },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "scene",
+        type: "scene_set",
+        payload: { locationId: "loc_2", locationName: "Unterstadt" },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toBeNull();
+
+    useGame.getState().ingest(
+      event({
+        id: "dialogue",
+        type: "narrate",
+        payload: {
+          text: "Zu spät.",
+          speakerNpcId: "npc_elara",
+        },
+      }),
+    );
+    useGame.getState().ingest(
+      event({
+        id: "combat",
+        type: "combat_started",
+        payload: { encounterId: "enc_1", name: "Hinterhalt", tokens: [] },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toBeNull();
+  });
+
+  it("applies server-authoritative stage changes across host and display clients", () => {
+    useGame.getState().ingest(
+      event({
+        id: "host_scene",
+        type: "stage_view_set",
+        payload: { view: "cinematic" },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toEqual({
+      mode: "cutscene",
+      eventId: "host_scene",
+      ts: 1,
+    });
+
+    useGame.getState().ingest(
+      event({
+        id: "host_map",
+        type: "stage_view_set",
+        payload: { view: "map" },
+      }),
+    );
+    expect(useGame.getState().scene.presentation).toBeNull();
+  });
+
   it("seeds exploration tokens from scene characters", () => {
     useGame.getState().ingest(
       event({

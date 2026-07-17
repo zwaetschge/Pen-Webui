@@ -52,6 +52,28 @@ export function latestDialoguePresentation(
     );
   if (!line) return null;
 
+  return dialoguePresentationForLine(line, scene);
+}
+
+export function dialoguePresentationForEvent(
+  chat: ChatLine[],
+  scene: SceneState,
+  eventId: string | null | undefined,
+): DialoguePresentation | null {
+  if (!eventId) return null;
+  const line = chat.find(
+    (candidate): candidate is NarrationLine | PlayerLine =>
+      candidate.id === eventId &&
+      (candidate.kind === "narrate" || candidate.kind === "player"),
+  );
+  return line ? dialoguePresentationForLine(line, scene) : null;
+}
+
+function dialoguePresentationForLine(
+  line: NarrationLine | PlayerLine,
+  scene: SceneState,
+): DialoguePresentation {
+
   if (line.kind === "player") {
     const character = scene.characters?.find(
       (candidate) => candidate.name === line.displayName,

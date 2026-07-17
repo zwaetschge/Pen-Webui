@@ -617,9 +617,13 @@ export function TacticalMap(props: Props) {
               selectedToken,
               combat,
             )}`
-          : scene.tacticalMapUrl
-            ? "Battlemap"
-            : "Raster"}
+          : props.readOnly
+            ? scene.tacticalMapUrl
+              ? "Battlemap"
+              : "Erkundungsraster"
+            : localCharacterIds.size > 0
+              ? "Figur wählen · Ziel anklicken · Ziehen/Scrollen bewegt die Kamera"
+              : "Erkundungskarte · Charakter über die Spieler-Lobby verbinden"}
       </div>
       {objectives.length > 0 ? (
         <div className="bg-ink-600/84 pointer-events-none absolute right-4 top-4 max-w-[min(23rem,48vw)] rounded-md border border-brass-700/45 px-3 py-2 shadow-xl">

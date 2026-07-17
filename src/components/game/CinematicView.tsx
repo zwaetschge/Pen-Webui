@@ -3,7 +3,10 @@
 import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useGame } from "@/lib/game/store";
-import { latestDialoguePresentation } from "@/lib/game/dialogue-presentation";
+import {
+  dialoguePresentationForEvent,
+  latestDialoguePresentation,
+} from "@/lib/game/dialogue-presentation";
 import { cn } from "@/lib/cn";
 import { AudioLineButton } from "./AudioLineButton";
 import { useTtsPlayback } from "./TtsProvider";
@@ -11,13 +14,23 @@ import { useTtsPlayback } from "./TtsProvider";
 export function CinematicView({
   audioEnabled = true,
   displayMode = false,
+  presentationMode = null,
+  presentationEventId = null,
+  onReturnToMap,
 }: {
   audioEnabled?: boolean;
   displayMode?: boolean;
+  presentationMode?: "dialogue" | "cutscene" | null;
+  presentationEventId?: string | null;
+  onReturnToMap?: () => void;
 }) {
   const scene = useGame((s) => s.scene);
   const chat = useGame((s) => s.chat);
-  const dialogue = latestDialoguePresentation(chat, scene);
+  const dialogue = presentationEventId
+    ? dialoguePresentationForEvent(chat, scene, presentationEventId)
+    : presentationMode
+      ? null
+      : latestDialoguePresentation(chat, scene);
   const dialogueId = dialogue?.id ?? null;
   const dialogueKind = dialogue?.kind ?? null;
   const lastAutoplayDialogueIdRef = useRef<string | null>(null);
@@ -91,6 +104,25 @@ export function CinematicView({
           <h2 className="mt-1 font-display text-2xl leading-none text-parchment-50 drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)] sm:text-3xl">
             {scene.locationName}
           </h2>
+        </div>
+      ) : null}
+
+      {presentationMode || onReturnToMap ? (
+        <div className="absolute right-4 top-4 z-30 flex items-center gap-2 sm:right-6 sm:top-6">
+          {presentationMode ? (
+            <span className="rounded-md border border-brass-700/45 bg-ink-600/78 px-3 py-2 font-display text-[10px] uppercase tracking-[0.22em] text-brass-300 shadow-xl backdrop-blur-sm">
+              {presentationMode === "dialogue" ? "Dialog" : "Cutscene"}
+            </span>
+          ) : null}
+          {onReturnToMap ? (
+            <button
+              type="button"
+              onClick={onReturnToMap}
+              className="min-h-10 rounded-md border border-brass-400/55 bg-ink-600/88 px-3 py-2 font-display text-[10px] uppercase tracking-[0.18em] text-parchment-100 shadow-xl backdrop-blur-sm hover:bg-ink-500/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-300"
+            >
+              Zur Karte
+            </button>
+          ) : null}
         </div>
       ) : null}
 

@@ -226,6 +226,67 @@ describe("recentEvents", () => {
     ]);
   });
 
+  it("backfills the last shared-stage state when it fell out of the replay tail", async () => {
+    const { recentEvents } = await import("./bus");
+    db.findMany.mockResolvedValue([
+      {
+        id: "player_202",
+        type: "player_input",
+        payload: { text: "Wir warten." },
+        scope: "all",
+        ts: new Date("2026-06-02T10:04:02.000Z"),
+      },
+      {
+        id: "player_201",
+        type: "player_input",
+        payload: { text: "Noch hier." },
+        scope: "all",
+        ts: new Date("2026-06-02T10:04:01.000Z"),
+      },
+    ]);
+    db.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "stage_cinematic",
+        type: "stage_view_set",
+        payload: { view: "cinematic" },
+        scope: "all",
+        ts: new Date("2026-06-02T10:03:00.000Z"),
+      });
+
+    const events = await recentEvents("sess_1");
+
+    expect(db.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        sessionId: "sess_1",
+        type: {
+          in: [
+            "narrate",
+            "stage_view_set",
+            "scene_set",
+            "combat_started",
+            "scene_ended",
+          ],
+        },
+      },
+      orderBy: [{ ts: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        type: true,
+        payload: true,
+        scope: true,
+        ts: true,
+      },
+    });
+    expect(events.map((event) => event.id)).toEqual([
+      "stage_cinematic",
+      "player_201",
+      "player_202",
+    ]);
+  });
+
   it("uses an event id cursor with a capped incremental replay limit", async () => {
     const { recentEvents } = await import("./bus");
     const cursorTs = new Date("2026-06-02T10:00:03.000Z");

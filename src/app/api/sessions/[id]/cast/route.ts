@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AuthError, requireDM } from "@/lib/auth";
+import { isSameOriginMutation } from "@/lib/request-origin";
 import {
   castStateForHost,
   CastSessionError,
@@ -24,7 +25,7 @@ export async function GET(_request: Request, { params }: Context) {
 }
 
 export async function POST(request: Request, { params }: Context) {
-  if (!sameOrigin(request)) {
+  if (!isSameOriginMutation(request)) {
     return NextResponse.json({ error: "cross_origin" }, { status: 403 });
   }
   const body = deviceSchema.safeParse(await request.json().catch(() => null));
@@ -38,7 +39,7 @@ export async function POST(request: Request, { params }: Context) {
 }
 
 export async function DELETE(request: Request, { params }: Context) {
-  if (!sameOrigin(request)) {
+  if (!isSameOriginMutation(request)) {
     return NextResponse.json({ error: "cross_origin" }, { status: 403 });
   }
   const body = deviceSchema.safeParse(await request.json().catch(() => null));
@@ -69,9 +70,4 @@ async function withCastRoute(
     }
     throw error;
   }
-}
-
-function sameOrigin(request: Request) {
-  const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin;
 }

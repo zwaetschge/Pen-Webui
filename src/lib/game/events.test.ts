@@ -75,6 +75,23 @@ describe("eventForClient", () => {
     expect(eventForClient(bootstrap, "host")).toBe(bootstrap);
   });
 
+  it("broadcasts host stage changes to the TV display and players", () => {
+    const stageView = event({
+      type: "stage_view_set",
+      payload: { view: "map" },
+    });
+
+    expect(CLIENT_EVENT_TYPES).toContain("stage_view_set");
+    expect(
+      eventForClient(stageView, {
+        role: "player",
+        characterId: null,
+        display: true,
+      }),
+    ).toBe(stageView);
+    expect(eventForClient(stageView, "host")).toBe(stageView);
+  });
+
   it("keeps v12 as a legacy bootstrap so existing sessions can be repaired", () => {
     expect(BOOTSTRAP_EVENT_TYPES).toContain("session_bootstrap_v12");
   });

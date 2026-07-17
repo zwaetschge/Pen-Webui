@@ -1,4 +1,6 @@
 export type GameplayConsoleMode = "inline" | "drawer" | null;
+export type SharedStageView = "map" | "cinematic";
+export type SharedStagePresentation = "dialogue" | "cutscene" | null;
 
 export function gameplayConsoleMode(input: {
   experience: "table" | "companion" | "display";
@@ -17,4 +19,12 @@ export function isHostConsoleAvailable(input: {
   sessionEnded: boolean;
 }) {
   return input.mode === "drawer" && !input.gameOver && !input.sessionEnded;
+}
+
+export function sharedStageView(input: {
+  combatActive: boolean;
+  presentationMode: SharedStagePresentation;
+}): SharedStageView {
+  if (input.combatActive) return "map";
+  return input.presentationMode ? "cinematic" : "map";
 }

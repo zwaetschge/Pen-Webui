@@ -7,6 +7,7 @@ import { useGame } from "@/lib/game/store";
 import {
   gameplayConsoleMode,
   isHostConsoleAvailable,
+  sharedStageView,
 } from "@/lib/game/session-progression";
 import { cn } from "@/lib/cn";
 import { CinematicView } from "./CinematicView";
@@ -52,9 +53,11 @@ export function GameRoom(props: {
   });
 
   const combat = useGame((s) => s.combat);
+  const scenePresentation = useGame((s) => s.scene.presentation ?? null);
   const gameOver = useGame((s) => s.gameOver);
   const sessionEnded = useGame((s) => s.sessionEnded);
-  const [forceTactical, setForceTactical] = useState(false);
+  const [stageViewPending, setStageViewPending] = useState(false);
+  const [stageViewError, setStageViewError] = useState<string | null>(null);
   const [tableOpen, setTableOpen] = useState(false);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
@@ -81,7 +84,11 @@ export function GameRoom(props: {
   });
   const ttsEnabled =
     isTtsExperienceEnabled(props.experience) && !(isTable && castActive);
-  const tactical = combat.active || forceTactical;
+  const stageView = sharedStageView({
+    combatActive: combat.active,
+    presentationMode: scenePresentation?.mode ?? null,
+  });
+  const tactical = stageView === "map";
   const showStage = isSharedScreen || combat.active || companionSceneOpen;
   const primaryCharacter = props.localCharacters?.[0] ?? null;
   const roomHeight = isSharedScreen
@@ -105,11 +112,39 @@ export function GameRoom(props: {
     await Promise.allSettled(requests);
   }
 
+  const requestStageView = useCallback(
+    async (view: "map" | "cinematic") => {
+      if (props.role !== "host" || stageViewPending) return;
+      setStageViewPending(true);
+      setStageViewError(null);
+      try {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(props.sessionId)}/stage-view`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ view }),
+          },
+        );
+        if (!response.ok) throw new Error(`stage_view_${response.status}`);
+      } catch {
+        setStageViewError(
+          "TV-Ansicht konnte nicht synchronisiert werden. Bitte erneut versuchen.",
+        );
+      } finally {
+        setStageViewPending(false);
+      }
+    },
+    [props.role, props.sessionId, stageViewPending],
+  );
+
   const continueAfterIntro = useCallback(() => {
-    if (!hostConsoleAvailable) return;
     setTableOpen(false);
-    setHostConsoleOpen(true);
-  }, [hostConsoleAvailable]);
+    setHostConsoleOpen(false);
+    if (isTable && props.role === "host") {
+      setSelectedTokenId(props.localCharacters?.[0]?.id ?? null);
+    }
+  }, [isTable, props.localCharacters, props.role]);
 
   return (
     <TtsProvider
@@ -234,15 +269,35 @@ export function GameRoom(props: {
                   {!combat.active ? (
                     <button
                       type="button"
-                      onClick={() => setForceTactical((value) => !value)}
+                      aria-pressed={!tactical}
+                      aria-busy={stageViewPending}
+                      disabled={stageViewPending}
+                      onClick={() =>
+                        void requestStageView(
+                          tactical ? "cinematic" : "map",
+                        )
+                      }
                       className={cn(
                         "console-command console-command-compact group",
-                        forceTactical && "console-command-active",
+                        !tactical && "console-command-active",
                       )}
                     >
                       <ViewGlyph className="size-5" />
-                      <span>{tactical ? "Szene" : "Karte"}</span>
+                      <span>
+                        {stageViewPending
+                          ? "Synchronisiere"
+                          : tactical
+                          ? scenePresentation?.mode === "dialogue"
+                            ? "Dialog"
+                            : "Szene"
+                          : "Karte"}
+                      </span>
                     </button>
+                  ) : null}
+                  {stageViewError ? (
+                    <span className="sr-only" role="status">
+                      {stageViewError}
+                    </span>
                   ) : null}
                   <button
                     type="button"
@@ -358,6 +413,15 @@ export function GameRoom(props: {
                       <CinematicView
                         audioEnabled={ttsEnabled}
                         displayMode={isDisplay}
+                        presentationMode={scenePresentation?.mode ?? null}
+                        presentationEventId={
+                          scenePresentation?.eventId ?? null
+                        }
+                        onReturnToMap={
+                          props.role === "host" && !isDisplay
+                            ? () => void requestStageView("map")
+                            : undefined
+                        }
                       />
                     )}
                   </div>
@@ -458,7 +522,7 @@ export function GameRoom(props: {
           </div>
           <IntroDirector
             sessionId={props.sessionId}
-            enabled={showStage && !tactical}
+            enabled={showStage && !combat.active}
             displayMode={isDisplay}
             onComplete={continueAfterIntro}
           />

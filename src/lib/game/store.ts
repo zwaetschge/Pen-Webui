@@ -166,6 +166,11 @@ export type SceneState = {
     portraitUrl?: string | null;
     mood?: string;
   } | null;
+  presentation?: {
+    mode: "dialogue" | "cutscene";
+    eventId: string;
+    ts: number;
+  } | null;
 };
 
 export type IntroSequenceState = {
@@ -468,8 +473,11 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
         const text = String(ev.payload.text ?? "");
         if (!text) break;
         const speakerNpcId = (ev.payload.speakerNpcId as string | null) ?? null;
-        set((s) =>
-          trimChat(
+        const requestedPresentation = narrationPresentation(
+          ev.payload.presentation,
+        );
+        set((s) => ({
+          ...trimChat(
             s.chat.concat({
               kind: "narrate",
               id: ev.id,
@@ -479,8 +487,6 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
               mood: ev.payload.mood as string | undefined,
             }),
           ),
-        );
-        set((s) => ({
           scene: {
             ...s.scene,
             activeNpc: speakerNpcId
@@ -491,7 +497,22 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
                     (ev.payload.speakerPortraitUrl as string | null) ?? null,
                   mood: ev.payload.mood as string | undefined,
                 }
-              : (s.scene.activeNpc ?? null),
+              : null,
+            presentation:
+              requestedPresentation === "map"
+                ? null
+                : requestedPresentation === "cutscene" ||
+                    requestedPresentation === "dialogue" ||
+                    speakerNpcId
+                  ? {
+                      mode:
+                        requestedPresentation === "cutscene"
+                          ? "cutscene"
+                          : "dialogue",
+                      eventId: ev.id,
+                      ts: ev.ts,
+                    }
+                  : null,
           },
         }));
         break;
@@ -593,6 +614,7 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
             turnGroup: null,
             aiIntent: null,
           },
+          scene: { ...s.scene, presentation: null },
         }));
         set((s) =>
           trimChat(
@@ -984,11 +1006,12 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
         break;
       }
       case "scene_ended": {
-        set({
+        set((s) => ({
           combat: { active: false },
           awaitingSkillCheck: null,
           tokens: {},
-        });
+          scene: { ...s.scene, presentation: null, activeNpc: null },
+        }));
         const summary = ev.payload.summary as string | undefined;
         if (summary) {
           set((s) =>
@@ -1448,6 +1471,7 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
                 npcList(ev.payload.presentNpcs) ?? s.scene.presentNpcs,
               characters,
               activeNpc: null,
+              presentation: null,
             },
             tokens: s.combat.active
               ? s.tokens
@@ -1469,6 +1493,24 @@ export const useGame = create<GameState & GameActions>((set, get) => ({
             }),
           ),
         );
+        break;
+      }
+      case "stage_view_set": {
+        const view = ev.payload.view;
+        if (view !== "map" && view !== "cinematic") break;
+        set((s) => ({
+          scene: {
+            ...s.scene,
+            presentation:
+              view === "map"
+                ? null
+                : {
+                    mode: "cutscene",
+                    eventId: ev.id,
+                    ts: ev.ts,
+                  },
+          },
+        }));
         break;
       }
       case "world_state_updated": {
@@ -1776,6 +1818,12 @@ function stringField(value: unknown) {
 function nullableStringField(value: unknown) {
   if (value == null) return null;
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function narrationPresentation(value: unknown) {
+  return value === "map" || value === "dialogue" || value === "cutscene"
+    ? value
+    : null;
 }
 
 function integerField(value: unknown) {

@@ -152,7 +152,7 @@ export function AssetDashboard({ campaignId }: { campaignId: string }) {
               >
                 {a.prompt}
               </p>
-              {a.errorMsg ? (
+              {a.status === "failed" && a.errorMsg ? (
                 <p className="mt-1 text-[11px] text-blood-500">
                   {a.errorMsg.slice(0, 140)}
                 </p>
