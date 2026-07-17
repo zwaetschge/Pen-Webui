@@ -151,6 +151,55 @@ describe("buildLoreBible", () => {
       },
     ]);
   });
+
+  it("drops invented private-upload URLs from the combined lore bible", async () => {
+    llmMock.completeDmJsonObject.mockResolvedValue({
+      sourceTitles: ["novel.md"],
+      canonFacts: ["Mira is the heir."],
+      characters: [],
+      locations: [],
+      timeline: [],
+      toneAndThemes: [],
+      adaptationRules: [],
+      forbiddenContradictions: [],
+      campaignHooks: [],
+      uncertainties: [],
+      citations: [
+        {
+          title: "novel.md",
+          url: "novel.md",
+          note: "The opening establishes Mira's inheritance.",
+        },
+      ],
+    });
+
+    const { buildLoreBible } = await import("./summarize");
+    const bible = await buildLoreBible("user_invalid_bible_url", {
+      theme: "Mira campaign",
+      uploadedSources: [
+        {
+          kind: "upload",
+          title: "novel.md",
+          summary: "Mira inherits House Tal.",
+          facts: ["Mira is the heir."],
+          citations: [{ title: "novel.md", note: "Opening paragraph." }],
+          contentHash: "d".repeat(64),
+        },
+      ],
+      researchHits: [],
+    });
+
+    const call = llmMock.completeDmJsonObject.mock.calls[0]?.[0];
+    expect(
+      call.outputSchema.properties.citations.items.properties.url.format,
+    ).toBe("uri");
+    expect(bible.citations).toEqual([
+      {
+        title: "novel.md",
+        note: "The opening establishes Mira's inheritance.",
+      },
+    ]);
+  });
 });
 
 describe("summarizePreparedSources", () => {

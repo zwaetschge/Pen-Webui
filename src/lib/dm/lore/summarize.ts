@@ -221,7 +221,7 @@ const loreBibleOutputSchema = {
         additionalProperties: false,
         properties: {
           title: { type: "string" },
-          url: { type: ["string", "null"] },
+          url: { type: ["string", "null"], format: "uri" },
           note: { type: "string" },
         },
         required: ["title", "note"],
