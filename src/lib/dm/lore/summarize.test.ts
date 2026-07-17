@@ -151,6 +151,55 @@ describe("buildLoreBible", () => {
       },
     ]);
   });
+
+  it("drops invented private-upload URLs from the combined lore bible", async () => {
+    llmMock.completeDmJsonObject.mockResolvedValue({
+      sourceTitles: ["novel.md"],
+      canonFacts: ["Mira is the heir."],
+      characters: [],
+      locations: [],
+      timeline: [],
+      toneAndThemes: [],
+      adaptationRules: [],
+      forbiddenContradictions: [],
+      campaignHooks: [],
+      uncertainties: [],
+      citations: [
+        {
+          title: "novel.md",
+          url: "novel.md",
+          note: "The opening establishes Mira's inheritance.",
+        },
+      ],
+    });
+
+    const { buildLoreBible } = await import("./summarize");
+    const bible = await buildLoreBible("user_invalid_bible_url", {
+      theme: "Mira campaign",
+      uploadedSources: [
+        {
+          kind: "upload",
+          title: "novel.md",
+          summary: "Mira inherits House Tal.",
+          facts: ["Mira is the heir."],
+          citations: [{ title: "novel.md", note: "Opening paragraph." }],
+          contentHash: "d".repeat(64),
+        },
+      ],
+      researchHits: [],
+    });
+
+    const call = llmMock.completeDmJsonObject.mock.calls[0]?.[0];
+    expect(
+      call.outputSchema.properties.citations.items.properties.url.format,
+    ).toBe("uri");
+    expect(bible.citations).toEqual([
+      {
+        title: "novel.md",
+        note: "The opening establishes Mira's inheritance.",
+      },
+    ]);
+  });
 });
 
 describe("summarizePreparedSources", () => {
@@ -221,6 +270,82 @@ describe("summarizePreparedSources", () => {
       ],
       contentHash: "a".repeat(64),
     });
+  });
+
+  it("normalizes object facts and defaults omitted citations", async () => {
+    llmMock.completeDmJsonObject.mockResolvedValue({
+      summary: "Mira erbt das verfallene Haus ihrer Familie.",
+      facts: [
+        { fact: "Mira ist die letzte Erbin." },
+        { subject: "Haus Tal", relation: "steht in", object: "Cypress Hollow" },
+      ],
+    });
+
+    const { summarizePreparedSources } = await import("./summarize");
+    const [source] = await summarizePreparedSources("user_malformed", {
+      theme: "Mira campaign",
+      sourceNotes: "preserve names",
+      uploadedSources: [
+        {
+          kind: "upload",
+          title: "novel.md",
+          rawText: "Private novel text about Mira and House Tal.",
+          summary: "",
+          facts: [],
+          citations: [],
+          contentHash: "f".repeat(64),
+        },
+      ],
+      researchHits: [],
+    });
+
+    expect(source.facts).toEqual([
+      "Mira ist die letzte Erbin.",
+      "Haus Tal — steht in — Cypress Hollow",
+    ]);
+    expect(source.citations).toEqual([]);
+  });
+
+  it("ignores invented URLs on citations for private uploads", async () => {
+    llmMock.completeDmJsonObject.mockResolvedValue({
+      summary: "Mira erbt das verfallene Haus ihrer Familie.",
+      facts: ["Mira ist die letzte Erbin."],
+      citations: [
+        {
+          title: "novel.md",
+          url: "novel.md",
+          note: "Die Erbfolge steht im ersten Absatz.",
+        },
+      ],
+    });
+
+    const { summarizePreparedSources } = await import("./summarize");
+    const [source] = await summarizePreparedSources("user_invalid_upload_url", {
+      theme: "Mira campaign",
+      uploadedSources: [
+        {
+          kind: "upload",
+          title: "novel.md",
+          rawText: "Private novel text about Mira and House Tal.",
+          summary: "",
+          facts: [],
+          citations: [],
+          contentHash: "e".repeat(64),
+        },
+      ],
+      researchHits: [],
+    });
+
+    const call = llmMock.completeDmJsonObject.mock.calls[0]?.[0];
+    expect(
+      call.outputSchema.properties.citations.items.properties,
+    ).not.toHaveProperty("url");
+    expect(source.citations).toEqual([
+      {
+        title: "novel.md",
+        note: "Die Erbfolge steht im ersten Absatz.",
+      },
+    ]);
   });
 
   it("chunks large uploaded sources before synthesis and does not resend raw text", async () => {

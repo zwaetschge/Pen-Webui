@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import { completeDmJsonObject } from "../llm";
 import {
-  loreCitationSchema,
   loreBibleSchema,
   type LoreBible,
   type PreparedLoreSource,
@@ -102,13 +101,59 @@ const UPLOAD_SOURCE_SYNTHESIS_PROMPT = [
   "Return only JSON matching the schema.",
 ].join("\n");
 
+const uploadSourceFactSchema = z.preprocess(
+  normalizeUploadSourceFact,
+  z.string().trim().min(1),
+);
+
+const uploadSourceCitationSchema = z.object({
+  title: z.string(),
+  note: z.string(),
+});
+
 const uploadSourceSummarySchema = z.object({
   summary: z.string(),
-  facts: z.array(z.string()),
-  citations: z.array(loreCitationSchema),
+  facts: z.array(uploadSourceFactSchema).default([]),
+  citations: z.array(uploadSourceCitationSchema).default([]),
 });
 type UploadSourceSummary = z.infer<typeof uploadSourceSummarySchema>;
 type ConcurrencyLimiter = <T>(task: () => Promise<T>) => Promise<T>;
+
+function normalizeUploadSourceFact(value: unknown) {
+  if (typeof value === "string" || !isRecord(value)) return value;
+
+  for (const key of [
+    "fact",
+    "text",
+    "statement",
+    "claim",
+    "description",
+    "summary",
+    "value",
+  ]) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+
+  const scalarValues = Object.values(value)
+    .filter(
+      (entry): entry is string | number | boolean =>
+        typeof entry === "string" ||
+        typeof entry === "number" ||
+        typeof entry === "boolean",
+    )
+    .map(String)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return scalarValues.length > 0 ? scalarValues.join(" — ") : value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const uploadSourceSummaryOutputSchema = {
   type: "object",
@@ -123,7 +168,6 @@ const uploadSourceSummaryOutputSchema = {
         additionalProperties: false,
         properties: {
           title: { type: "string" },
-          url: { type: "string" },
           note: { type: "string" },
         },
         required: ["title", "note"],
@@ -177,7 +221,7 @@ const loreBibleOutputSchema = {
         additionalProperties: false,
         properties: {
           title: { type: "string" },
-          url: { type: ["string", "null"] },
+          url: { type: ["string", "null"], format: "uri" },
           note: { type: "string" },
         },
         required: ["title", "note"],
@@ -309,11 +353,7 @@ async function summarizeUploadSource(
     ...source,
     summary: parsed.summary,
     facts: parsed.facts,
-    citations: parsed.citations.map((citation) => ({
-      title: citation.title,
-      url: citation.url,
-      note: citation.note,
-    })),
+    citations: parsed.citations.map(({ title, note }) => ({ title, note })),
   };
 }
 
@@ -420,11 +460,7 @@ async function mergeUploadSummaryBatch(
               chunkIndex: index + 1,
               summary: chunk.summary,
               facts: chunk.facts,
-              citations: chunk.citations.map((citation) => ({
-                title: citation.title,
-                url: citation.url ?? null,
-                note: citation.note,
-              })),
+              citations: chunk.citations,
             })),
           },
         }),

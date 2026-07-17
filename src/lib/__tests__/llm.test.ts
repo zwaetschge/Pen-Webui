@@ -188,7 +188,8 @@ describe("Codex JSON object completion", () => {
     process.env.CODEX_EXEC_TIMEOUT_SECONDS = "10";
   });
 
-  it("does not pass large JSON schemas to codex exec for JSON object calls", async () => {
+  it("includes JSON schemas in the Codex prompt without using the CLI schema flag", async () => {
+    let prompt = "";
     spawnMock.mockImplementation((_command: string, args: string[]) => {
       const child = new EventEmitter() as EventEmitter & {
         stdin: PassThrough;
@@ -200,6 +201,9 @@ describe("Codex JSON object completion", () => {
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
       child.kill = vi.fn();
+      child.stdin.on("data", (chunk) => {
+        prompt += chunk.toString();
+      });
 
       const outputPath = args[args.indexOf("--output-last-message") + 1];
       queueMicrotask(() => {
@@ -227,6 +231,8 @@ describe("Codex JSON object completion", () => {
     const args = spawnMock.mock.calls[0]?.[1] as string[];
     expect(args).toContain("--output-last-message");
     expect(args).not.toContain("--output-schema");
+    expect(prompt).toContain("OUTPUT JSON SCHEMA:");
+    expect(prompt).toContain('"ok":{"type":"boolean"}');
   });
 
   it("parses the first complete JSON object when codex appends extra output", async () => {

@@ -70,11 +70,28 @@ export async function completeDmChat(
 export async function completeDmJsonObject(
   opts: CompleteJsonOptions,
 ): Promise<unknown> {
+  const structuredOpts = {
+    ...opts,
+    system: [opts.system, renderOutputSchemaInstruction(opts.outputSchema)]
+      .filter(Boolean)
+      .join("\n\n"),
+  };
   const result = await withApiFallback(
-    () => completeCodexJsonObject(opts),
-    () => completeOpenAIJsonObject(opts),
+    () => completeCodexJsonObject(structuredOpts),
+    () => completeOpenAIJsonObject(structuredOpts),
   );
   return result.value;
+}
+
+function renderOutputSchemaInstruction(
+  outputSchema: Record<string, unknown> | undefined,
+) {
+  if (!outputSchema) return "";
+  return [
+    "OUTPUT JSON SCHEMA:",
+    JSON.stringify(outputSchema),
+    "Every required field must be present. Use an empty array when a required array has no values. Array items must use the exact item type from the schema.",
+  ].join("\n");
 }
 
 export async function codexLoginStatus(): Promise<{

@@ -5,11 +5,31 @@ export const loreOptionsSchema = z.object({
   sourceNotes: z.string().max(2000).optional(),
 });
 
+const loreCitationUrlSchema = z.preprocess(
+  normalizeLoreCitationUrl,
+  z.string().url().optional(),
+);
+
 export const loreCitationSchema = z.object({
   title: z.string(),
-  url: z.string().url().nullable().optional().transform((value) => value ?? undefined),
+  url: loreCitationUrlSchema,
   note: z.string(),
 });
+
+function normalizeLoreCitationUrl(value: unknown) {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (typeof value !== "string") return value;
+
+  const candidate = value.trim();
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? candidate
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const loreBibleSchema = z.object({
   sourceTitles: z.array(z.string()).default([]),
