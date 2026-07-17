@@ -62,6 +62,7 @@ export const CLIENT_EVENT_TYPES = [
   "session_ended",
   "scene_ended",
   "scene_set",
+  "stage_view_set",
   "token_moved",
   "damage_applied",
   "status_applied",

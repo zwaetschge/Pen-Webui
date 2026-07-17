@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   gameplayConsoleMode,
   isHostConsoleAvailable,
+  sharedStageView,
 } from "./session-progression";
 
 describe("session progression controls", () => {
@@ -42,5 +43,35 @@ describe("session progression controls", () => {
         sessionEnded: true,
       }),
     ).toBe(false);
+  });
+
+  it("uses the interactive map as the shared-screen default", () => {
+    expect(
+      sharedStageView({
+        combatActive: false,
+        presentationMode: null,
+      }),
+    ).toBe("map");
+  });
+
+  it.each(["dialogue", "cutscene"] as const)(
+    "shows %s cues cinematically outside combat",
+    (presentationMode) => {
+      expect(
+        sharedStageView({
+          combatActive: false,
+          presentationMode,
+        }),
+      ).toBe("cinematic");
+    },
+  );
+
+  it("always prioritizes combat over a cinematic cue", () => {
+    expect(
+      sharedStageView({
+        combatActive: true,
+        presentationMode: "cutscene",
+      }),
+    ).toBe("map");
   });
 });

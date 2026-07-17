@@ -67,6 +67,7 @@ async function processJob(job: Job<AssetJob>) {
         url,
         s3Key: key,
         backend,
+        errorMsg: null,
         width: dims.width,
         height: dims.height,
         generatedAt: new Date(),

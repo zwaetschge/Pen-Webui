@@ -198,6 +198,16 @@ async function boundedRedisOperation<T>(
 const DEFAULT_REPLAY_LIMIT = 200;
 const MAX_REPLAY_LIMIT = 500;
 const CLIENT_REPLAY_EVENT_TYPES = [...CLIENT_EVENT_TYPES];
+const PRESENTATION_STATE_EVENT_TYPES = [
+  "narrate",
+  "stage_view_set",
+  "scene_set",
+  "combat_started",
+  "scene_ended",
+] as const;
+const PRESENTATION_STATE_EVENT_TYPE_SET = new Set<string>(
+  PRESENTATION_STATE_EVENT_TYPES,
+);
 
 export type RecentEventsOptions = {
   afterEventId?: string;
@@ -257,7 +267,12 @@ export async function recentEvents(
       scope: true,
       ts: true,
     } as const;
-    const [latestBootstrap, latestScene, latestCombatLifecycle] =
+    const [
+      latestBootstrap,
+      latestScene,
+      latestCombatLifecycle,
+      latestPresentationState,
+    ] =
       await Promise.all([
         replayRows.some((row) => isBootstrapEventType(row.type))
           ? null
@@ -294,6 +309,18 @@ export async function recentEvents(
               orderBy: [{ ts: "desc" }, { id: "desc" }],
               select,
             }),
+        replayRows.some((row) =>
+          PRESENTATION_STATE_EVENT_TYPE_SET.has(row.type),
+        )
+          ? null
+          : prisma.eventLog.findFirst({
+              where: {
+                sessionId,
+                type: { in: [...PRESENTATION_STATE_EVENT_TYPES] },
+              },
+              orderBy: [{ ts: "desc" }, { id: "desc" }],
+              select,
+            }),
       ]);
     const anchors = [
       latestBootstrap && isBootstrapEventType(latestBootstrap.type)
@@ -303,9 +330,23 @@ export async function recentEvents(
       latestCombatLifecycle?.type === "combat_started"
         ? latestCombatLifecycle
         : null,
+      latestPresentationState &&
+      PRESENTATION_STATE_EVENT_TYPE_SET.has(latestPresentationState.type)
+        ? latestPresentationState
+        : null,
     ].filter((row): row is NonNullable<typeof row> => row !== null);
     const replayIds = new Set(replayRows.map((row) => row.id));
-    replayRows.unshift(...anchors.filter((row) => !replayIds.has(row.id)));
+    const missingAnchors = anchors
+      .filter((row) => !replayIds.has(row.id))
+      .filter(
+        (row, index, rows) =>
+          rows.findIndex((candidate) => candidate.id === row.id) === index,
+      )
+      .sort(
+        (a, b) =>
+          a.ts.getTime() - b.ts.getTime() || a.id.localeCompare(b.id),
+      );
+    replayRows.unshift(...missingAnchors);
   }
   return replayRows.map((r) => ({
     id: r.id,

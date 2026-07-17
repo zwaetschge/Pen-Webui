@@ -57,6 +57,9 @@ const rollDiceArgs = z.object({
 const narrateArgs = z.object({
   text: z.string().min(1),
   speakerNpcId: z.string().optional(),
+  presentation: z
+    .enum(["map", "dialogue", "cutscene"])
+    .optional(),
   mood: z
     .enum(["neutral", "tense", "joyful", "menacing", "mysterious", "somber"])
     .optional(),
@@ -380,6 +383,7 @@ const narrateHandler: ToolHandler = async (ctx, raw) => {
       speakerName,
       speakerPortraitUrl: speakerPortrait,
       mood: a.mood ?? "neutral",
+      presentation: a.presentation ?? null,
     },
   });
   return "narration delivered";
@@ -981,6 +985,7 @@ export const dmTools: Record<
         name: "narrate",
         description:
           "Deliver narrative prose to the players. Use for descriptions, NPC dialogue, scene-setting. Keep paragraphs short and evocative.\n" +
+          "NPC speech with speakerNpcId automatically opens the dialogue backdrop. Set presentation='cutscene' only for a non-interactive establishing shot, reveal, or montage; set presentation='map' when free exploration resumes.\n" +
           GERMAN_STYLE_CONTRACT,
         parameters: {
           type: "object",
@@ -991,6 +996,12 @@ export const dmTools: Record<
               type: "string",
               description:
                 "if an NPC is speaking, their ID — pulls up their portrait",
+            },
+            presentation: {
+              type: "string",
+              enum: ["map", "dialogue", "cutscene"],
+              description:
+                "visual mode for this beat; omit for ordinary narration, use cutscene for a deliberate cinematic beat",
             },
             mood: {
               type: "string",

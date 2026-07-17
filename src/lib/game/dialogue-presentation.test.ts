@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dialoguePresentationForEvent,
   latestDialoguePresentation,
   speakerForNarration,
 } from "./dialogue-presentation";
@@ -126,6 +127,34 @@ describe("dialogue presentation", () => {
       text: "Regen trommelt auf die Plane.",
       mood: undefined,
       portraitUrl: undefined,
+    });
+  });
+
+  it("pins a cinematic presentation to its triggering event", () => {
+    const chat: ChatLine[] = [
+      {
+        kind: "narrate",
+        id: "npc_line",
+        ts: 1,
+        text: "Bleibt, wo ihr seid.",
+        speakerNpcId: "npc_elara",
+      },
+      {
+        kind: "player",
+        id: "player_line",
+        ts: 2,
+        displayName: "Robert",
+        text: "Warum?",
+      },
+    ];
+
+    expect(dialoguePresentationForEvent(chat, scene, "npc_line")).toEqual({
+      id: "npc_line",
+      kind: "npc",
+      speakerLabel: "Elara",
+      text: "Bleibt, wo ihr seid.",
+      mood: undefined,
+      portraitUrl: "https://assets.example/elara.png",
     });
   });
 });

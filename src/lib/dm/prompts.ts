@@ -56,6 +56,11 @@ ${FAN_REFERENCE_RULES}
   and wait — never roll on the player's behalf without telling them.
 - Use \`narrate\` for prose delivered to players.  Keep paragraphs short
   (2–4 sentences). One \`narrate\` call per beat, not one giant wall.
+- The shared screen defaults to the interactive map. NPC speech must include
+  \`speakerNpcId\` so the dialogue backdrop and portrait appear. Use
+  \`presentation: "cutscene"\` only for an establishing shot, reveal, or
+  montage where input briefly yields to the scene; use \`presentation: "map"\`
+  when exploration resumes.
 - If an action has uncertainty or danger, choose an appropriate ability/skill,
   set a fair DC, call \`request_skill_check\`, and wait for the player's roll.
 - When a player roll result appears, compare it to the latest requested DC or

@@ -53,8 +53,29 @@ describe("narrate style gate", () => {
           speakerName: null,
           speakerPortraitUrl: null,
           mood: "neutral",
+          presentation: null,
         },
       },
     ]);
+  });
+
+  it("emits an explicit cutscene presentation cue", async () => {
+    const events: ToolEvent[] = [];
+    const text = "Über der Stadt reißt der Himmel auf.";
+
+    const result = await runToolCall(ctx(events), {
+      id: "call_cutscene",
+      type: "function",
+      function: {
+        name: "narrate",
+        arguments: JSON.stringify({ text, presentation: "cutscene" }),
+      },
+    });
+
+    expect(result).toBe("narration delivered");
+    expect(events[0]).toMatchObject({
+      type: "narrate",
+      payload: { text, presentation: "cutscene" },
+    });
   });
 });
